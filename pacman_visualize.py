@@ -27,6 +27,26 @@ plt.xticks(rotation=45)
 plt.tight_layout()
 plt.savefig("visualizations/events_per_month.svg")
 
+# Action Distribution
+#
+action_counts = df["action"].value_counts()
+plt.figure(figsize=(6, 6))
+action_counts.plot(kind="pie", autopct="%1.1f%%", startangle=140)
+plt.title("Distribution of Package Actions")
+plt.ylabel("")
+plt.tight_layout()
+plt.savefig("visualizations/action_distribution.svg")
+
+# Time between upgrades for most upgraded packages (optional)
+#
+upgrade_df = df[df["action"] == "upgraded"]
+pkg_times = upgrade_df.groupby(["package"]).apply(lambda x: x["timestamp"].sort_values().diff().dropna().dt.days, include_groups=False)
+plt.figure(figsize=(6, 10))
+pkg_times.plot.box()
+plt.title("Upgrade interval")
+plt.tight_layout()
+plt.savefig("visualizations/upgrade_interval.svg")
+
 # Draw top packages based on each action
 #
 fig, axes = plt.subplots(2, 2, figsize=(24, 16))
