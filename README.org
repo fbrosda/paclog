@@ -2,8 +2,9 @@
 
 Did you ever wonder, which packages you installed when, who long they are kept on your system, or which package gets the most frequent updates?  If you are using Arch Linux you can use the information of ~/var/cache/pacman.log~ to generate some nice images to answer these questions.
 
-This repository contains to script to extract the interesting information from the pacman log:
+This repository contains the following scripts to extract the interesting information from the pacman log:
 - ~pacman_parse.py~ :: Reads the file ~data/pacman.log~ and writes ~data/pacman_history.csv~, which contains the package install/uninstall/update events in a easier to work with format.
 - ~pacman_visualize.py~ :: This script generates a number of svg files stored in ~visualizations/~, based on the data in the ~pacman_history.csv~
+- ~pacman_timeline.py~ :: Create the timeline visualization. Separate script, as it is a bit more complicated.
 
-
+The results can be viewed in [[file:visualizations/][visualizations/]]. The base data there is the pacman.log from my personal L460, where I installed Arch Linux on 03/12/2016 and it's running ever since, without reinstallation.
