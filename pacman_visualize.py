@@ -6,6 +6,16 @@ df = pd.read_csv("data/pacman_history.csv", parse_dates=["timestamp"])
 df["action"] = df["action"].str.lower()
 df["month"] = df["timestamp"].dt.to_period("M")
 
+# Draw hourly distribution of pacman updates
+#
+hourly_counts = df.groupby(df['timestamp'].dt.hour).size()
+hourly_counts.plot(kind="bar", figsize=(14, 8))
+plt.title("Package Event Distribution Over The Day")
+plt.xlabel("Hour of the day")
+plt.ylabel("# Events")
+plt.tight_layout()
+plt.savefig("visualizations/events_per_hour.svg")
+
 # Draw monthly actions
 #
 monthly_counts = df.groupby(["month", "action"]).size().unstack()
