@@ -3,8 +3,8 @@ import csv
 from datetime import datetime
 from pathlib import Path
 
-PACMAN_LOG_PATH = Path("/var/log/pacman.log")
-OUTPUT_CSV_PATH = "pacman_history.csv"
+PACMAN_LOG_PATH = Path("data/pacman.log")
+OUTPUT_CSV_PATH = "data/pacman_history.csv"
 
 LOG_PATTERN_OLD = re.compile(
     r'^\[(?P<timestamp>\d{4}-\d{2}-\d{2}\s\d{2}:\d{2})\] '
