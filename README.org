@@ -1,6 +1,6 @@
 #+title: Visualizations of pacman logs
 
-[[file:visualizations/top_packages.svg][Top Packages by Install/Update/Remove/Reinstall]]
+[[./visualizations/top_packages.svg][Top Packages by Install/Update/Remove/Reinstall]]
 
 Did you ever wonder, which packages you installed when, who long they are kept on your system, or which package gets the most frequent updates?  If you are using Arch Linux you can use the information of ~/var/cache/pacman.log~ to generate some nice images to answer these questions.
 
