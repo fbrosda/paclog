@@ -3,7 +3,7 @@ import csv
 from datetime import datetime
 from pathlib import Path
 
-PACMAN_LOG_PATH = Path("data/pacman.log")
+PACMAN_LOG_PATH = Path("/var/log/pacman.log")
 OUTPUT_CSV_PATH = "data/pacman_history.csv"
 
 LOG_PATTERN_OLD = re.compile(

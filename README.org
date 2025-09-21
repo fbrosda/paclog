@@ -6,6 +6,7 @@ Did you ever wonder, which packages you installed when, who long they are kept o
 
 This repository contains the following scripts to extract the interesting information from the pacman log:
 - ~pacman_parse.py~ :: Reads the file ~data/pacman.log~ and writes ~data/pacman_history.csv~, which contains the package install/uninstall/update events in a easier to work with format.
+- ~paclog.ipynb~ :: A Jupyter notebook, with some analysis of the logs.
 - ~pacman_visualize.py~ :: This script generates a number of svg files stored in ~visualizations/~, based on the data in the ~pacman_history.csv~
 - ~pacman_timeline.py~ :: Create the timeline visualization. Separate script, as it is a bit more complicated.
 
