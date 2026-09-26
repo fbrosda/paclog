@@ -1,13 +1,74 @@
 #+title: Visualizations of pacman logs
-
 #+html: <img src="./visualizations/top_packages.svg" />
 
-Did you ever wonder, which packages you installed when, who long they are kept on your system, or which package gets the most frequent updates?  If you are using Arch Linux you can use the information of ~/var/cache/pacman.log~ to generate some nice images to answer these questions.
+Did you ever wonder, which packages you installed when, how long they are kept on your system, or which package gets the most frequent updates?  If you are using Arch Linux you can use the information of ~/var/log/pacman.log~ to generate some nice images to answer these questions.
 
-A notebook containing annotated visualizations for my personal data can be found at [[file:paclog.ipynb]]. If you want to use this to visualize your own pacman.log, there are a few more scripts you can execute:
+* Usage
 
-- ~pacman_parse.py~ :: Reads the file ~data/pacman.log~ and writes ~data/pacman_history.csv~, which contains the package install/uninstall/update events in a easier to work with format.
-- ~pacman_visualize.py~ :: This script generates a number of svg files stored in ~visualizations/~, based on the data in the ~pacman_history.csv~
-- ~pacman_timeline.py~ :: Create the timeline visualization. Separate script, as it is a bit more complicated.
+~paclog~ is an installable Python package with a command line interface.  Install it in a virtual environment (Arch's system Python is externally managed, so ~pip install~ into it will refuse):
 
-The results can be viewed in [[file:visualizations/][visualizations/]]. The base data there is the pacman.log from my personal L460, where I installed Arch Linux on 03/12/2016 and it's running ever since, without reinstallation.
+#+begin_src bash
+python -m venv --system-site-packages .venv
+.venv/bin/pip install -e .
+#+end_src
+
+Then read your log and draw the charts:
+
+#+begin_src bash
+.venv/bin/paclog parse      # /var/log/pacman.log -> data/pacman_history.csv
+.venv/bin/paclog plot       # -> SVG charts in visualizations/
+.venv/bin/paclog timeline   # -> visualizations/timeline.svg
+#+end_src
+
+~paclog build~ does all three in order.  Without installing, ~python -m paclog~ works the same way from the repository root.
+
+** Commands
+
+| command           | what it does                                                        |
+|-------------------+---------------------------------------------------------------------|
+| ~paclog parse~    | Read the log into ~data/pacman_history.csv~ plus a metadata sidecar |
+| ~paclog stats~    | Print headline numbers (~--json~ for machine-readable output)        |
+| ~paclog plot~     | Render charts; takes chart names, ~--list~ shows the options        |
+| ~paclog timeline~ | Render the install-period timeline (opt-in; it is the expensive one) |
+| ~paclog build~    | ~parse~, then every default chart, then the timeline                 |
+| ~paclog list~     | List the available charts                                            |
+
+Useful options, all of which apply to every command:
+
+- ~--log PATH~ :: Read this log instead of the discovered ones.  Repeatable.  Without it, ~paclog~ reads ~/var/log/pacman.log~ *and* any rotated or gzipped siblings, so a logrotate setup does not silently cost you most of your history.
+- ~--tz ZONE~ :: Timezone for the hour-of-day and month buckets.  ~auto~ (the default) reuses whatever the parse run resolved; pass an IANA name like ~Europe/Berlin~ to be exact.
+- ~--assume-tz ZONE~ :: Timezone for the pre-2019 log lines that carry no UTC offset.  See [[*Timezones][Timezones]] below.
+- ~--root DIR~ :: Base directory for relative paths, so the tool no longer depends on your shell's working directory.
+- ~--as-of TIMESTAMP~ :: Treat still-installed packages as installed until this moment.  Defaults to the newest event in the data, which keeps re-runs byte-identical.
+
+* What the data looks like
+
+The CSV has one row per package-affecting ALPM entry:
+
+- ~package~: the package name
+- ~timestamp~: when it happened, as offset-bearing ISO-8601, normalized to UTC
+- ~action~: one of ~installed~, ~upgraded~, ~downgraded~, ~removed~, ~reinstalled~
+- ~version_before~: empty for ~installed~
+- ~version_after~: empty for ~removed~
+
+All five actions are recorded.  Note that ~downgraded~ is easy to miss: it is a real ALPM verb, and the hand-written parser this package grew out of dropped every such event on the author's machine.
+
+Alongside the CSV, ~paclog parse~ writes ~data/pacman_history.meta.json~ recording the source logs, the row count, the resolved timezones, and a full account of which lines were skipped and why.  The old parser dropped anything it did not recognise with no trace, so a suspiciously low row count had no explanation available.
+
+* Timezones
+
+Until 2019-10-27, pacman wrote timestamps without an offset; after that it writes ISO-8601 with one.  A single log file can contain both, and on the author's machine roughly a third of the lines are the offset-less kind.
+
+The CSV stores UTC, so rows are unambiguous and sortable.  Charts then bucket in a *display* timezone, chosen by ~--tz~; the default reuses the timezone recorded in the metadata.  For the offset-less lines, ~--assume-tz~ decides what they mean.  Left on ~auto~, paclog uses the most common offset found among the lines that do carry one, and records that it did so in the metadata -- but a single fixed offset cannot be right across a DST switch.  Pass an IANA name (~--assume-tz Europe/Berlin~) if you want the naive lines resolved exactly.
+
+* Reproducibility
+
+Charts are committed to this repository, which only works if re-running produces the same bytes.  Three things make that true: the timeline's colours come from a CRC of the package name rather than an unseeded random number, matplotlib's ~svg.hashsalt~ is pinned, and the creation timestamp is suppressed.  A consequence is that ~paclog plot~ no longer leaves a dirty working tree, so a modified SVG in ~git status~ means the data actually changed.
+
+* Notebook
+
+[[file:paclog.ipynb][paclog.ipynb]] is an annotated walkthrough of the same questions, written against this author's own history.  Its code cells import ~paclog~ and call the same functions the CLI does, so the narrative cannot drift away from the tool.
+
+* License
+
+BSD 3-Clause, see [[file:LICENSE][LICENSE]].
