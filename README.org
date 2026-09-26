@@ -60,9 +60,7 @@ Alongside the CSV, ~paclog parse~ writes ~data/pacman_history.meta.json~ recordi
 Run ~paclog list~ to see the registry.  Two things about them are worth stating outright, because both were got wrong at one point during development and the mistake was invisible in the output:
 
 - The timeline draws *every* package, with *every* one of them labelled.  There is no default cap.  An earlier revision limited it to the 150 packages with the longest history and a later one thinned the y axis labels to roughly 80 of 2 808; both were reverted.  Trimming a chart makes it smaller and useless, and on this log the difference was between a chart you can read and a file you can only measure.  The cost is size: ~4.6 MB for 2 808 packages and 3 944 install periods, which is close to what the original ~4.1 MB chart cost while drawing three times as many artists.  If you want a smaller one on purpose, ~--top-n~ is still there.
-- ~events_per_month.svg~ stacks by action, as it always did, and ~events_per_month_by_action.svg~ breaks the same data into one panel per action on independent y scales.  Both exist because upgrades are 90% of events here and 45 of the events are downgrades; stacked, the four minor series are a sliver at the base of each bar, and unsplit, ~downgraded~ is a flat line on zero.  The stacked chart is 32x18 for the same reason -- 126 months of five series needs the width.
-
-The legend on the stacked chart sits above the plot area.  It used to sit at ~upper left~, which is exactly where the March-2016 first-install spike is.
+- ~events_per_month.svg~ is one panel per action, each with its own y scale, instead of the original's single stacked bar per month.  A stacked bar cannot encode this log: upgrades are 90.42% of the events and downgrades are 0.07% -- 45 of 68 521 -- so the four minority series collapse into a hairline at the base of every bar and ~downgraded~ sits flat on zero.  Splitting the panels is the smallest change that makes all five readable at once, and it keeps the monthly bucketing, which is the point of the chart.  Each panel is annotated with its own peak.
 
 * Timezones
 

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import matplotlib
 import pytest
 
 from paclog import analyze, plots
 from paclog.plots import Context, names, render, render_all
-from paclog.plots.base import ACTION_COLORS
+from paclog.plots.base import ACTION_COLORS, color_for
 from paclog.plots.timeline import stable_unit
 
 AS_OF = datetime(2021, 4, 10, tzinfo=timezone.utc)
@@ -164,39 +165,32 @@ def test_timeline_height_grows_to_fit_rather_than_capping_rows(big_frame):
 # -- monthly charts --------------------------------------------------------- #
 
 
-def test_events_per_month_stacks_by_action(frame):
-    """One bar per month, split by action, as the original chart had it.
+def test_events_per_month_is_one_panel_per_action(frame):
+    """One panel per action, each on its own scale, stacked in ACTION_ORDER.
 
-    An earlier attempt replaced this with a plain total series. That dropped the
-    action mix from the chart, which is information the original showed and the
-    notebook narrative discusses.
+    This replaced the original's single stacked bar per month. Three earlier
+    shapes were tried and all three lost information: a 150-package cap on the
+    timeline, a plain total-events series with no action breakdown, and the
+    stacked bar, which cannot show a mix where one action is 90% of the events.
     """
     from paclog.model import ACTION_ORDER
 
     table = analyze.events_per_month(frame)
+    present = [a for a in ACTION_ORDER if a.value in table.columns]
     fig = render("events-per-month", frame, Context(as_of=AS_OF))
-    ax = fig.axes[0]
-    assert len(fig.axes) == 1
-    assert len(ax.patches) == table.shape[0] * len(table.columns)
-    assert ax.get_legend() is not None
-    assert [h.get_text() for h in ax.get_legend().get_texts()][:1] == [ACTION_ORDER[0].value]
+    assert [ax.get_ylabel() for ax in fig.axes] == [a.value for a in present]
+    for ax, action in zip(fig.axes, present):
+        assert len(ax.patches) == table.shape[0]
+        assert all(p.get_facecolor()[:3] == matplotlib.colors.to_rgb(color_for(action.value))
+                   for p in ax.patches)
 
 
-def test_events_per_month_legend_cannot_cover_the_install_spike(frame):
-    """The original put the legend at ``loc="upper left"``.
-
-    On a real log that is exactly where the tallest thing in the left third of
-    the chart is -- the March-2016 first-install spike, 551 installs -- so the
-    legend drew on top of the data it was labelling. It now sits above the axes,
-    in display coordinates, and cannot overlap the plot area at all.
-    """
-    from matplotlib.transforms import Bbox
-
-    ax = render("events-per-month", frame, Context(as_of=AS_OF)).axes[0]
-    legend = ax.get_legend()
-    anchor = legend.get_bbox_to_anchor().transformed(ax.transAxes.inverted())
-    assert isinstance(anchor, Bbox)
-    assert anchor.y0 > 1.0, "legend must be anchored above the top of the axes"
+def test_events_per_month_keeps_every_month(frame):
+    """Splitting by action must not drop months, including the empty ones."""
+    table = analyze.events_per_month(frame)
+    fig = render("events-per-month", frame, Context(as_of=AS_OF))
+    for ax in fig.axes:
+        assert len(ax.patches) == table.shape[0]
 
 
 def big_packages(frame) -> int:
@@ -248,7 +242,7 @@ def skewed_frame():
 
 def test_a_dominant_action_does_not_flatten_the_others(skewed_frame):
     """Each panel scales to its own peak, so the minority action stays visible."""
-    fig = render("events-per-month-by-action", skewed_frame, Context(as_of=AS_OF))
+    fig = render("events-per-month", skewed_frame, Context(as_of=AS_OF))
     scales = {ax.get_ylabel(): ax.get_ylim()[1] for ax in fig.axes}
     peaks = analyze.events_per_month(skewed_frame).max()
     assert scales["upgraded"] > 1000 * scales["downgraded"]
@@ -262,11 +256,3 @@ def test_a_dominant_action_does_not_flatten_the_others(skewed_frame):
 def test_monthly_charts_handle_a_single_event_month(skewed_frame):
     assert not analyze.events_per_month(skewed_frame).empty
     render("events-per-month", skewed_frame, Context(as_of=AS_OF))
-
-
-def test_events_per_month_by_action_has_one_panel_per_action(frame):
-    from paclog.model import ACTION_ORDER
-
-    fig = render("events-per-month-by-action", frame, Context(as_of=AS_OF))
-    assert len(fig.axes) == len(ACTION_ORDER)
-    assert [ax.get_ylabel() for ax in fig.axes] == [a.value for a in ACTION_ORDER]

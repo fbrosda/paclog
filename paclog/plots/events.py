@@ -7,7 +7,7 @@ import pandas as pd
 
 from .. import analyze
 from ..model import ACTION_ORDER
-from .base import ACTION_COLOR_LIST, color_for, colors_for, figure, finish
+from .base import ACTION_COLOR_LIST, color_for, figure, finish
 from .registry import Context, chart
 
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -55,74 +55,22 @@ def events_per_weekday(frame: pd.DataFrame, ctx: Context):
     "events-per-month",
     "events_per_month.svg",
     "Package Events Per Month",
-    "stacked monthly event counts by action",
-)
-def events_per_month(frame: pd.DataFrame, ctx: Context):
-    """Monthly event counts, stacked by action.
-
-    This keeps the original chart's encoding: one stacked bar per month, split by
-    action, so the mix is readable inside each month. The size is the original
-    32x18 rather than the notebook's 16x9, because 126 months of five series
-    stacked is a dense chart and at 16 inches the bars are too narrow to read.
-
-    One real fix over the original: the legend sat at ``loc="upper left"``, which
-    is exactly where the March-2016 first-install spike is -- 551 installs, the
-    tallest thing in the left third of the chart. It is now placed above the axes
-    so it cannot cover data.
-    """
-    table = analyze.events_per_month(frame)
-    fig = figure("events-per-month")
-    ax = fig.add_subplot(111)
-    if table.empty:
-        ax.text(0.5, 0.5, "no events", ha="center", va="center", transform=ax.transAxes)
-    else:
-        plotted = table.copy()
-        plotted.index = pd.DatetimeIndex(plotted.index)
-        plotted.plot(
-            kind="bar",
-            stacked=True,
-            ax=ax,
-            width=27,
-            color=colors_for(table.columns),
-            legend=True,
-        )
-        ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=(1, 7)))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
-        for label in ax.get_xticklabels():
-            label.set_rotation(45)
-            label.set_ha("right")
-        # Above the axes: the original's upper-left legend covered the first
-        # install spike.
-        ax.legend(
-            title="",
-            ncols=len(table.columns),
-            loc="lower center",
-            bbox_to_anchor=(0.5, 1.01),
-            fontsize=10,
-        )
-    ax.set_xlabel("Month")
-    ax.set_ylabel("# Events")
-    ax.set_title("Package Events Per Month")
-    finish(ax)
-    return fig
-
-
-@chart(
-    "events-per-month-by-action",
-    "events_per_month_by_action.svg",
-    "Package Events Per Month, By Action",
     "one panel per action, each with its own scale",
 )
-def events_per_month_by_action(frame: pd.DataFrame, ctx: Context):
+def events_per_month(frame: pd.DataFrame, ctx: Context):
     """Small multiples: one panel per action, each with an independent y-axis.
 
-    Sharing a single y-axis is what makes a stacked bar unreadable here, and
-    sharing one panel per action is what makes `downgraded` (45 events out of
-    68 521) visible at all.
+    This replaces the original's single stacked bar per month, which cannot be
+    read on a real log. Upgrades are 90.42% of events here and downgrades are
+    0.07% -- 45 of 68 521 -- so on a shared axis the four minority series
+    collapse into a hairline at the base of every bar and ``downgraded`` is flat
+    on zero. One panel per action with its own scale is the smallest change that
+    makes all five legible at once, and it keeps the monthly bucketing, which is
+    the thing the chart is for.
     """
     table = analyze.events_per_month(frame)
     present = [a for a in ACTION_ORDER if a.value in table.columns]
-    fig = figure("events-per-month-by-action", figsize=(16, 3 * max(len(present), 1)))
+    fig = figure("events-per-month", figsize=(16, 3 * max(len(present), 1)))
     if table.empty:
         ax = fig.add_subplot(111)
         ax.text(0.5, 0.5, "no events", ha="center", va="center", transform=ax.transAxes)
@@ -149,7 +97,11 @@ def events_per_month_by_action(frame: pd.DataFrame, ctx: Context):
 
     axes[-1].xaxis.set_major_locator(mdates.MonthLocator(bymonth=(1, 7)))
     axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
-    axes[0].set_title("Package Events Per Month, By Action")
+    for label in axes[-1].get_xticklabels():
+        label.set_rotation(45)
+        label.set_ha("right")
+    axes[-1].set_xlabel("Month")
+    axes[0].set_title("Package Events Per Month")
     fig.tight_layout()
     return fig
 
