@@ -1,0 +1,39 @@
+[2016-03-12 12:37] [PACMAN] Running 'pacman -r /mnt -Sy base base-devel'
+[2016-03-12 12:53] [ALPM] transaction started
+[2016-03-12 12:53] [ALPM] installed filesystem (2015.09-1)
+[2016-03-12 12:53] [ALPM] installed tzdata (2016a-1)
+[2016-03-12 12:53] [ALPM] installed gptfdisk (1.0.1-2)
+[2016-03-12 12:53] [ALPM] transaction completed
+[2016-03-12 12:54] [ALPM] running 'systemd-update.hook'...
+[2016-03-12 12:54] [ALPM-SCRIPTLET] Created symlink /etc/systemd/system/getty.target.wants/
+[2016-03-12 12:54] filesystem: 750  package: 755
+[2016-03-12 13:10] [ALPM] warning: could not open file
+[2016-03-12 14:15] [ALPM] transaction started
+[2016-03-12 14:15] [ALPM] removed tzdata (2016a-1)
+[2016-03-12 14:15] [ALPM] transaction completed
+[2016-03-12 14:15] [ALPM] transaction started
+[2016-03-12 14:15] [ALPM] reinstalled filesystem (2015.09-1)
+[2016-03-12 14:15] [ALPM] transaction completed
+[2016-12-10 16:56] [ALPM] upgraded filesystem (2015.09-1 -> 2016.12-2)
+[2016-12-10 16:56] [ALPM] downgraded st (1.0.2-1 -> 1.0.1-1)
+[2016-12-10 16:57] [ALPM] upgraded st (1.0.1-1 -> 1.0.2-1 -> 1.0.3-1)
+[2017-07-30 00:20] [ALPM] upgraded gptfdisk (1.0.1-2 -> 1.0.3-1)
+[2017-07-30 00:20] [ALPM] upgraded filesystem (2016.12-2 -> 2017.03-2)
+[2017-07-30 00:20] [ALPM] error: could not extract foo
+[2019-10-27T16:16:59+0100] [PACMAN] Running 'pacman --sync --refresh --sysupgrade'
+[2019-10-27T16:17:01+0100] [ALPM] transaction started
+[2019-10-27T16:17:01+0100] [ALPM] upgraded filesystem (2017.03-2 -> 2019.10-1)
+[2019-10-27T16:17:01+0100] [ALPM] transaction completed
+[2019-10-27T16:17:01+0100] [ALPM] running 'glib-compile-schemas.hook'...
+[2021-04-09T07:42:23+0200] [PACKAGEKIT] synchronizing package lists
+[2021-04-09T21:34:24+0200] [ALPM] transaction started
+[2021-04-09T21:34:24+0200] [ALPM] installed st (1.0.3-1)
+[2021-04-09T21:34:24+0200] [ALPM] transaction completed
+[2021-04-09T21:34:24+0200] [ALPM] transaction started
+[2021-04-09T21:34:24+0200] [ALPM] reinstalled st (1.0.3-1)
+[2021-04-09T21:34:24+0200] [ALPM] transaction completed
+[2021-04-09T22:05:11+0200] [ALPM] transaction started
+[2021-04-09T22:05:11+0200] [ALPM] removed filesystem (2019.10-1)
+[2021-04-09T22:05:11+0200] [ALPM] transaction completed
+[2021-04-09T22:05:11+0200] [ALPM] transaction failed
+[2026-09-26T20:53:02+0200] [ALPM] running 'update-desktop-database.hook'...
