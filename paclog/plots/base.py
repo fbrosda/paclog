@@ -62,6 +62,21 @@ def apply_style() -> None:
     ``svg.hashsalt`` is the load-bearing one: it defaults to ``None``, which makes
     matplotlib salt SVG element ids from a fresh UUID, so two runs over identical
     data produce different bytes. Setting it is what makes charts diffable.
+
+    ``svg.fonttype`` is the second one that matters, and it is a size decision.
+    The default, ``"path"``, converts every glyph to an outline and then emits one
+    ``<use>`` element per character, so a 2 808-label y axis becomes 38 167 ``<use>``
+    references plus 2 329 path definitions -- about 64% of the 4.6 MB timeline and
+    17% more in glyph defs, for text that is illegible at any zoom on a 700-inch
+    canvas. ``"none"`` writes a real ``<text>`` element instead and the viewer
+    shapes the glyphs. Nothing is dropped and the bytes stay reproducible (this
+    only changes how the *renderer's* font is applied, not what the file contains),
+    but it does mean the committed chart is now at the mercy of the viewer's font
+    metrics: matplotlib lays the labels out with DejaVu Sans and a machine without
+    it substitutes something else. In practice the substitutes are narrower, so
+    labels gain slack rather than colliding, and the two charts that would be hurt
+    most -- ``timeline`` and ``staleness-heatmap`` -- use a 4pt label on a canvas
+    where the row pitch is 18pt, so there is a lot of room to give away.
     """
     global _STYLE_APPLIED
     if _STYLE_APPLIED:
@@ -69,6 +84,7 @@ def apply_style() -> None:
     plt.rcParams.update(
         {
             "svg.hashsalt": "paclog",
+            "svg.fonttype": "none",
             "figure.facecolor": "white",
             "axes.facecolor": "white",
             "axes.grid": False,
