@@ -107,6 +107,71 @@ tests/          pytest, driven by a hand-written fixtures/pacman.log
   regenerated on `paclog plot`, so a size reduction is only worth having if the
   chart still says the same thing. Check the label count and the drawn-segment
   count against `analyze.install_periods` after touching `plots/timeline.py`.
+- **A month with no events in it has no column to reindex from.** July 2019 on
+  the author's log is empty, so `unstack` never emits it; reindexing the grid
+  back onto a `month_range` re-adds the column as all-NaN with no dtype to infer,
+  it arrives as `object`, and the next `to_numpy(dtype="datetime64[ns]")` raises
+  `ValueError: Could not convert object to NumPyy datetime`. `package_staleness`
+  casts the reindexed frame back to the original column dtype; the test
+  `test_staleness_survives_a_month_with_no_events_at_all` guards it.
+- **The session gap is a parameter because the log cannot settle it.** Log
+  timestamps have one-second resolution, so a transaction that straddles a second
+  boundary is indistinguishable from two. `SESSION_GAP_SECONDS` is 60, and the
+  author's log is 3 157 sessions at 60 s, 9 807 at 0 s, 2 720 at 300 s — which is
+  why the charts that draw this put the number they used in the title. Do not
+  "fix" the threshold to a rounder number without updating that title, the
+  `transactions` docstring and the README together, or the chart and the prose
+  will disagree about what it says. Sessions are a different unit from events and
+  do not inherit the censoring rules of `install_periods`: a session is a
+  contiguous run, so a package removed and reinstalled later appears in two of
+  them and the counts deliberately double up.
+- **Cell geometry has to be derived, not left to `add_subplot`.** The heatmap
+  (`plots/staleness.py`) is one `imshow` on an explicit `add_axes(GRID_BOX)`,
+  with the row pitch set to `config.INCHES_PER_PACKAGE`, the column pitch forced
+  equal to it so the cells are square, and the figure sized from the two. Under
+  `add_subplot`'s defaults a nominal 0.25 in pitch came out at 0.16 in, which is
+  the difference between a heatmap and a vertical gradient. Three numbers are
+  coupled here and must change together: `GRID_BOX`, the figure size, and
+  `RASTER_DPI`. The last one is why the chart alone sets `Chart.dpi` (8) — at
+  matplotlib's default 100 a 738-inch figure crams 28 pixels into every row, and
+  the SVG is 3.8 MB either way. Leave `dpi=None` on every vector chart so the
+  committed bytes of the older ones cannot move.
+- **A 738-inch figure cannot be Agg-drawn at dpi 100.** That is over the 65 535
+  pixel limit, and `fig.canvas.draw()` raises. Any test that needs a renderer on
+  the heatmap has to use the fixture log, not the real one.
+- **Size the calendar from the cell, and lay the bands out as one sum.**
+  `plots/calendar.py` works in points and inches throughout: `CELL_POINTS = 11`
+  fixes both the week pitch and the day pitch, and every margin is a named
+  constant in inches. The panel geometry must be a sum of those constants with
+  each block appearing exactly once. An earlier version added `panel_in` to the
+  bottom offset *and* used it as the axes height, which put the first panel's top
+  edge 0.17 in above the canvas and drove the caption into the 2016 label.
+  `test_calendar_caption_clears_the_first_year_label` asserts the arithmetic, not
+  the appearance, because the failure mode is invisible in a diff.
+- **`ax.get_yaxis_transform()` kills freetype on these charts.** The blended
+  x-data/y-axes transform is so anisotropic on a 700-inch canvas that
+  `fig.canvas.draw()` dies with `RuntimeError: FT_Render_Glyph (ft2font_wrapper
+  .cpp line 1947) failed with error 0x62: raster overflow`. For text at a data
+  x and an axes-relative y, use `ax.transAxes` and feed it
+  `mdates.date2num(...)` — a date axis's `get_xlim()` returns float days, not
+  `Timestamp`s.
+- **On a log axis, anchor bars to an edge, not to the bin midpoint.**
+  `ax.bar(np.sqrt(low * high), ..., width=high - low)` measures the width in the
+  transformed space, so each rectangle lands a fraction inside its own bin and
+  every pair is separated by a sliver. `align="edge"` at `x=low` covers the bin
+  exactly and the bars tile the axis.
+- **Use the explicit `unit=` form for every `pd.Timedelta`.** `pd.Timedelta(hours=1)`
+  and comparing a `Series.diff()` against a `pd.Timedelta` both go through numpy's
+  *generic* timedelta unit, which pandas 2.3 and numpy 2.5 deprecate and will turn
+  into an error. `pd.Timedelta(1, unit="h")` and int64-nanosecond comparisons are
+  clean. Run the suite with `-W error::DeprecationWarning` when touching date
+  arithmetic.
+- **Overlap claims are worth asserting, because the eye is not a test.** Several
+  defects here were only visible by measuring: the legend over the base-install
+  annotation, the two interval labels on top of each other, the calendar's legend
+  covering a decade of data. `get_renderer().get_window_extent()` on the text
+  artists answers it, and `tests/test_plots.py` now has those checks so a
+  regression is a failing test rather than a remark.
 - **Do not add `numpy` back as a dependency.** It was imported and never used in
   both the original script and the notebook; it is gone.
 

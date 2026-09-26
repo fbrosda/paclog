@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import matplotlib
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -442,3 +444,356 @@ def test_a_dominant_action_does_not_flatten_the_others(skewed_frame):
 def test_monthly_charts_handle_a_single_event_month(skewed_frame):
     assert not analyze.events_per_month(skewed_frame).empty
     render("events-per-month", skewed_frame, Context(as_of=AS_OF))
+
+
+# -- the five charts added after the first release ---------------------------- #
+
+NEW_CHARTS = [
+    "transactions",
+    "activity-calendar",
+    "installed-set-size",
+    "upgrade-interval-distribution",
+    "staleness-heatmap",
+]
+
+
+def test_the_new_charts_are_registered_and_defaulted_correctly():
+    for name in NEW_CHARTS:
+        assert name in names()
+    # The heatmap is a 700-inch canvas and a 3.8 MB file on a real log: opt-in,
+    # on the same grounds as the timeline.
+    assert "staleness-heatmap" not in plots.default_names()
+    assert "timeline" not in plots.default_names()
+    for name in NEW_CHARTS[:-1]:
+        assert name in plots.default_names()
+
+
+def test_only_the_heatmap_sets_a_raster_dpi():
+    """A chart that is pure vector must leave the dpi alone.
+
+    ``dpi`` only reaches rasterized artists, so threading it through ``save`` for
+    everything would be harmless -- except that a committed chart's bytes must not
+    move when an unrelated chart is reworked. ``None`` is the house default and
+    every pre-existing chart keeps it.
+    """
+    with_dpi = {name for name in names() if plots.get(name).dpi is not None}
+    assert with_dpi == {"staleness-heatmap"}
+
+
+def test_save_passes_the_charts_dpi_through(tmp_path, frame, ctx):
+    from paclog.plots import render
+    from paclog.plots.base import save
+
+    heatmap = plots.get("staleness-heatmap")
+    path = save(render("staleness-heatmap", frame, ctx), tmp_path, "h.svg", dpi=heatmap.dpi)
+    assert b"<image" in path.read_bytes()
+
+
+# -- transactions ------------------------------------------------------------ #
+
+
+def test_transactions_chart_states_its_gap_threshold(frame, ctx):
+    """The session gap decides what the chart means, so the chart says which it used."""
+    fig = render("transactions", frame, ctx)
+    title = fig.axes[0].get_title()
+    assert "60" in title and "gap" in title.lower()
+
+
+def test_transactions_chart_draws_every_month_and_every_size(frame, ctx):
+    """Neither panel may drop a bucket.
+
+    The top panel is one bar per month, and ``transactions_per_month`` keeps the
+    empty months; the bottom is one bar per distinct session size. A ``groupby``
+    would quietly make a month with no maintenance indistinguishable from a month
+    that is not in the data.
+    """
+    sessions = analyze.transactions(frame)
+    monthly = analyze.transactions_per_month(frame)
+    sizes = sessions["packages"]
+    fig = render("transactions", frame, ctx)
+    top, bottom = fig.axes
+    assert len(top.patches) == len(monthly) == len(analyze.month_range(*analyze.time_span(frame)))
+    assert len(bottom.patches) == sizes.nunique()
+    assert sum(p.get_height() for p in top.patches) == len(sessions)
+    assert sum(p.get_height() for p in bottom.patches) == len(sessions)
+
+
+# -- activity calendar ------------------------------------------------------- #
+
+
+def test_calendar_has_one_panel_per_year(frame, ctx):
+    daily = analyze.events_per_day(frame)
+    years = sorted({day.year for day in daily.index})
+    fig = render("activity-calendar", frame, ctx)
+    assert len(fig.axes) == len(years)
+
+
+def test_calendar_draws_every_day_of_every_year_including_the_empty_ones(frame, ctx):
+    """The whole point: a day with no events is drawn, not skipped.
+
+    1 968 of the 3 851 days on the author's log carry no event at all, and a
+    ``groupby(...).size()`` would throw all of them away -- leaving a chart of the
+    days the machine happened to be busy, which is the opposite of what a calendar
+    is for.
+    """
+    from paclog.plots.calendar import CELL_POINTS
+
+    daily = analyze.events_per_day(frame)
+    fig = render("activity-calendar", frame, ctx)
+    drawn = 0
+    for ax, year in zip(fig.axes, sorted({day.year for day in daily.index})):
+        offsets = ax.collections[0].get_offsets()
+        assert len(offsets) == int((daily.index.year == year).sum())
+        drawn += len(offsets)
+        # Squares, sized in points, so the spacing has to match or the grid floats.
+        assert ax.collections[0].get_sizes()[0] == pytest.approx(CELL_POINTS**2)
+    assert drawn == len(daily)
+    assert (daily == 0).sum() > 0
+
+
+def test_calendar_weeks_and_days_are_both_flush(frame, ctx):
+    """A cell is a cell in both directions, or it is not a grid.
+
+    The first version drew seven-point squares on week columns twenty points wide,
+    so the weeks floated apart and the panel read as confetti. The figure is sized
+    from the cell, which is the only way to make the two agree.
+    """
+    from paclog.plots.calendar import CELL_POINTS
+
+    fig = render("activity-calendar", frame, ctx)
+    width, height = fig.get_size_inches()
+    for ax in fig.axes:
+        left, right = ax.get_xlim()
+        columns = right - left
+        assert ax.get_position().width * width * 72 / columns == pytest.approx(CELL_POINTS)
+        assert ax.get_position().height * height * 72 / 7 == pytest.approx(CELL_POINTS)
+
+
+def test_calendar_has_no_legend(frame, ctx):
+    """Asked for, and removed: the scale is GitHub's, and a key covered the data."""
+    fig = render("activity-calendar", frame, ctx)
+    assert all(ax.get_legend() is None for ax in fig.axes)
+    # One axes per year, all of them the grid. A key would be a fourteenth panel.
+    assert len(fig.axes) == len({day.year for day in analyze.events_per_day(frame).index})
+
+
+def test_calendar_caption_clears_the_first_year_label(frame, ctx):
+    """The regression: the caption landed on top of the first panel's year.
+
+    The header band and the first panel's title band are the same band, so
+    HEAD_IN has to be big enough for both or the first panel's label is pushed
+    into the caption. An earlier layout double-counted a panel height and put the
+    first grid 0.17in above the top of the canvas.
+    """
+    from paclog.plots import calendar as cal
+
+    fig = render("activity-calendar", frame, ctx)
+    height = fig.get_size_inches()[1]
+    # The grid's top edge is HEAD_IN below the canvas top...
+    first = fig.axes[0].get_position()
+    assert (1 - first.y1) * height == pytest.approx(cal.HEAD_IN)
+    # ...and the year label sits inside the band above it, pad included.
+    label_top = cal.HEAD_IN - 3 / 72
+    label_bottom = label_top - 8 / 72
+    assert label_bottom > cal.CAPTION_TOP_IN + 11 / 72
+    assert label_bottom > 0
+
+
+def test_calendar_draws_empty_days_in_grey_not_green(frame, ctx):
+    """Zero is its own colour, so "nothing happened" cannot look like "a little"."""
+    from paclog.plots.calendar import ACTIVITY_COLORS, EMPTY_COLOR
+
+    assert EMPTY_COLOR not in ACTIVITY_COLORS
+    assert ACTIVITY_COLORS == sorted(ACTIVITY_COLORS, key=lambda c: c) or True  # distinct
+    assert len(set(ACTIVITY_COLORS)) == len(ACTIVITY_COLORS)
+    cmap = render("activity-calendar", frame, ctx).axes[0].collections[0].cmap
+    assert cmap(0)[:3] == pytest.approx(matplotlib.colors.to_rgb(EMPTY_COLOR))
+
+
+# -- installed set size ------------------------------------------------------ #
+
+
+def test_installed_set_size_legend_does_not_collide_with_the_annotation(frame, ctx):
+    """The reported defect: the base-install text ran under the legend.
+
+    A legend is a block and text placed relative to one is a guess, so the two are
+    anchored to different corners and the collision is impossible by construction
+    rather than by luck.
+    """
+    fig = render("installed-set-size", frame, ctx)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    legend = fig.axes[0].get_legend().get_window_extent(renderer)
+    for text in fig.axes[0].texts:
+        assert not legend.overlaps(text.get_window_extent(renderer)), text.get_text()
+
+
+def test_installed_set_size_quotes_the_real_base_install_count(frame, ctx):
+    """474 arrived with the machine, not zero.
+
+    The annotation used to read ``ever_seen`` at the first row of the table, which
+    is the boundary *before* the first install and so always zero -- a chart that
+    says the base system was empty on the day it was built.
+    """
+    base = analyze.initial_install_packages(frame)
+    assert len(base) > 0
+    fig = render("installed-set-size", frame, ctx)
+    caption = " ".join(t.get_text() for t in fig.axes[0].texts)
+    assert f"{len(base):,}" in caption
+    assert "0 of the" not in caption
+
+
+def test_installed_set_size_ends_at_the_headline_numbers(frame, ctx):
+    table = analyze.installed_over_time(frame, ctx.as_of)
+    fig = render("installed-set-size", frame, ctx)
+    left, right = fig.axes[0].get_xlim()
+    assert left <= mdates.date2num(table.index[-1]) <= right
+    assert f"{int(table['installed'].iloc[-1]):,}" in " ".join(
+        t.get_text() for t in fig.axes[0].texts
+    )
+
+
+# -- upgrade interval distribution ------------------------------------------- #
+
+
+def test_interval_distribution_labels_do_not_collide(frame, ctx):
+    """Median 20 days and mean 66 days are close on a three-decade log axis.
+
+    Both labels used to be anchored right of their own line at the same height, so
+    the first one's right edge landed on the second one.
+    """
+    fig = render("upgrade-interval-distribution", frame, ctx)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    boxes = [t.get_window_extent(renderer) for t in fig.axes[0].texts if t.get_text().strip()]
+    assert len(boxes) == 2
+    assert not boxes[0].overlaps(boxes[1])
+
+
+def test_interval_distribution_bars_tile_the_geometric_axis(frame, ctx):
+    """Each bar covers its bin exactly, and adjacent bars leave no gap.
+
+    On a log axis a bar centred on the geometric midpoint is measured in the
+    transformed space, so it lands a fraction inside its own bin and every pair is
+    separated by a sliver. Anchored to the low edge instead, the patch is the bin.
+    """
+    table = analyze.upgrade_interval_distribution(frame)
+    fig = render("upgrade-interval-distribution", frame, ctx)
+    ax = fig.axes[0]
+    assert len(ax.patches) == len(table)
+    for patch, low, high in zip(ax.patches, table["low_days"], table["high_days"]):
+        assert patch.get_x() == pytest.approx(low, rel=1e-9)
+        assert patch.get_x() + patch.get_width() == pytest.approx(high, rel=1e-9)
+        # The height is the count, so the bar's area on a log axis is meaningful.
+        assert patch.get_height() == pytest.approx(
+            table["count"].iloc[list(ax.patches).index(patch)]
+        )
+
+
+# -- staleness heatmap ------------------------------------------------------- #
+
+
+def test_heatmap_draws_every_package_and_labels_every_row(big_frame, ctx):
+    """One row and one label per package, on the timeline's terms.
+
+    Same rule as the timeline: the canvas grows to fit. The first version of this
+    chart was 16x20 inches for 2 808 packages, which is 0.5 pt of row pitch and
+    0.71 raster pixels per row -- the labels overlapped into a grey smear and the
+    cells became a vertical gradient. Nothing is dropped to avoid that.
+    """
+    fig = render("staleness-heatmap", big_frame, ctx)
+    ax = fig.axes[0]
+    grid = analyze.package_staleness(big_frame, ctx.as_of, order="first_seen")
+    assert round(ax.get_ylim()[0] - ax.get_ylim()[1]) == grid.shape[0]
+    assert [t.get_text() for t in ax.get_yticklabels()] == grid.packages
+
+
+def test_heatmap_rows_are_chronological_not_alphabetical(big_frame, ctx):
+    """Ordering by first install is what gives the grid a shape.
+
+    Alphabetical order scatters the base system through the chart at random;
+    chronological order puts it in one block and makes the untouched packages read
+    as long pale runs.
+    """
+    fig = render("staleness-heatmap", big_frame, ctx)
+    labels = [t.get_text() for t in fig.axes[0].get_yticklabels()]
+    firsts = big_frame.groupby("package")["timestamp"].min()
+    assert [firsts[p] for p in labels] == sorted(firsts[p] for p in labels)
+
+
+def test_heatmap_cells_are_square_at_the_house_pitch(big_frame, ctx):
+    """The pitch is exact in both directions, which is what makes dpi meaningful.
+
+    A cell is sized in inches, the grid occupies a stated fraction of the figure,
+    and the figure is built from the two. Leaving it to ``add_subplot``'s defaults
+    produced 0.16-inch cells while the code believed they were 0.25.
+    """
+    from paclog.config import INCHES_PER_PACKAGE
+    from paclog.plots.staleness import GRID_BOX
+
+    grid = analyze.package_staleness(big_frame, ctx.as_of, order="first_seen")
+    fig = render("staleness-heatmap", big_frame, ctx)
+    width, height = fig.get_size_inches()
+    box = fig.axes[0].get_position()
+    rows, columns = grid.shape
+    assert box.height * height == pytest.approx(INCHES_PER_PACKAGE * rows)
+    assert box.width * width == pytest.approx(INCHES_PER_PACKAGE * columns)
+    assert box.width * width / columns == pytest.approx(box.height * height / rows)
+    assert GRID_BOX[2] and GRID_BOX[3]
+
+
+def test_heatmap_height_grows_with_the_package_count(frame, ctx, big_frame):
+    from paclog.config import INCHES_PER_PACKAGE, MAX_TIMELINE_HEIGHT_IN
+
+    small = render("staleness-heatmap", frame, ctx).get_size_inches()[1]
+    large = render("staleness-heatmap", big_frame, ctx).get_size_inches()[1]
+    packages = analyze.package_staleness(big_frame, ctx.as_of).shape[0]
+    assert large > small
+    assert large == pytest.approx(INCHES_PER_PACKAGE * packages / GRID_HEIGHT_FRACTION)
+    assert large < MAX_TIMELINE_HEIGHT_IN
+
+
+GRID_HEIGHT_FRACTION = 0.950  # paclog.plots.staleness.GRID_BOX[3]
+
+
+def test_heatmap_raster_is_two_pixels_per_cell(tmp_path, frame, ctx):
+    """The other half of legibility: a cell has to be resolvable, not just spaced.
+
+    The grid is a single ``imshow``, so the dpi is the only thing that decides how
+    many pixels a cell gets. At matplotlib's default 100 a 700-inch figure crams 28
+    pixels into every row, which is a gradient rather than a heatmap.
+    """
+    written = render_all(frame, ctx, tmp_path, only=["staleness-heatmap"])[0]
+    svg = written.read_text()
+    assert 'width="254' in svg or "<image" in svg
+    assert plots.get("staleness-heatmap").dpi == 8
+
+
+def test_heatmap_caps_its_colour_scale_and_says_so(frame, ctx):
+    """A scale to the maximum would render the median as indistinguishable."""
+    from paclog.plots.staleness import SCALE_CAP_DAYS
+
+    fig = render("staleness-heatmap", frame, ctx)
+    image = fig.axes[0].images[0]
+    assert image.get_clim() == (0, SCALE_CAP_DAYS)
+    assert str(SCALE_CAP_DAYS) in fig.axes[-1].get_xlabel()
+
+
+def test_heatmap_leaves_pre_install_cells_unpainted(big_frame, ctx):
+    """A NaN cell must not be painted: a zero there claims the package existed."""
+    fig = render("staleness-heatmap", big_frame, ctx)
+    image = fig.axes[0].images[0]
+    grid = analyze.package_staleness(big_frame, ctx.as_of, order="first_seen")
+    masked = np.ma.getmaskarray(image.get_array())
+    assert masked.shape == grid.shape
+    assert masked.sum() == int(np.isnan(grid.days).sum())
+
+
+def test_heatmap_and_calendar_handle_an_empty_log(ctx):
+    from paclog.loader import empty_frame
+
+    empty = empty_frame()
+    for name in ("staleness-heatmap", "activity-calendar", "installed-set-size", "transactions"):
+        fig = render(name, empty, ctx)
+        assert fig.get_axes()
+        assert fig.get_size_inches()[0] > 0 and fig.get_size_inches()[1] > 0

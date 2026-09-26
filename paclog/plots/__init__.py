@@ -7,7 +7,17 @@ by the CLI and the notebook.
 
 from __future__ import annotations
 
-from . import cadence, events, lifetime, timeline, top  # noqa: F401  (imported for registration)
+from . import (  # noqa: F401  (imported for registration)
+    calendar,
+    cadence,
+    events,
+    installed,
+    lifetime,
+    sessions,
+    staleness,
+    timeline,
+    top,
+)
 from .base import ACTION_COLORS, apply_style, save
 from .registry import (
     REGISTRY,

@@ -15,7 +15,7 @@ from . import __version__, analyze, loader, store
 from .config import AUTO, Config, ConfigError, add_common_arguments, format_offset, resolve_tzinfo
 from .loader import LogNotFound
 from .parsing import STRUCTURAL_REASONS
-from .plots import Context, describe, names, render_all
+from .plots import Context, default_names, describe, names, render_all
 
 
 class Reporter:
@@ -229,7 +229,12 @@ def cmd_timeline(args: argparse.Namespace) -> int:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    """parse, then every default chart, then the timeline."""
+    """parse, then every default chart, then the timeline.
+
+    The opt-in charts other than the timeline stay opt-in: ``build`` is what
+    someone runs to refresh the committed output, and a 3.8 MB heatmap nobody
+    asked for should not turn up in it.
+    """
     status = cmd_parse(args)
     if status != 0:
         return status
@@ -300,7 +305,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_plot = sub.add_parser("plot", help="render charts from the parsed CSV")
     add_common_arguments(p_plot)
-    p_plot.add_argument("charts", nargs="*", help=f"chart names to render (default: all but the timeline)")
+    # Built from the registry rather than written out, so adding a third opt-in
+    # chart cannot leave the help claiming there is only one.
+    opt_in = [name for name in names() if name not in set(default_names())]
+    p_plot.add_argument(
+        "charts",
+        nargs="*",
+        help=f"chart names to render (default: all except {', '.join(opt_in)})",
+    )
     p_plot.add_argument(
         "--top-n",
         dest="top_n",
@@ -317,7 +329,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_arguments(p_timeline)
     p_timeline.set_defaults(func=cmd_timeline)
 
-    p_build = sub.add_parser("build", help="parse, render every chart, render the timeline")
+    p_build = sub.add_parser(
+        "build",
+        help=(
+            "parse, render every default chart, then the timeline; the other "
+            "opt-in charts stay opt-in"
+        ),
+    )
     add_common_arguments(p_build)
     p_build.add_argument("--strict", action="store_true", help="see `paclog parse --strict`")
     p_build.add_argument("--dedupe", action="store_true", help="see `paclog parse --dedupe`")

@@ -41,6 +41,10 @@ class Chart:
     render: RenderFn
     description: str = ""
     default: bool = True
+    #: dpi for rasterized artists. ``None`` is the house default and is correct for
+    #: every pure-vector chart; a chart whose artwork is a raster over a very large
+    #: canvas sets it, because otherwise its cells are smeared together.
+    dpi: int | None = None
 
     def __call__(self, frame: pd.DataFrame, ctx: Context) -> "Figure":
         return self.render(frame, ctx)
@@ -52,6 +56,7 @@ def chart(
     title: str,
     description: str = "",
     default: bool = True,
+    dpi: int | None = None,
 ) -> Callable[[RenderFn], RenderFn]:
     """Register a render function under ``name``.
 
@@ -70,6 +75,7 @@ def chart(
             render=fn,
             description=description,
             default=default,
+            dpi=dpi,
         )
         return fn
 
@@ -112,8 +118,9 @@ def render_all(
 
     written: list[Path] = []
     for name in selected:
+        entry = get(name)
         fig = render(name, frame, ctx)
-        written.append(save(fig, out_dir, get(name).filename))
+        written.append(save(fig, out_dir, entry.filename, dpi=entry.dpi))
     return written
 
 

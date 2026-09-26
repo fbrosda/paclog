@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -465,3 +466,357 @@ def test_empty_frame_does_not_explode():
 def test_missing_timestamp_column_is_reported_clearly():
     with pytest.raises(KeyError, match="timestamp"):
         analyze.action_counts(pd.DataFrame({"package": ["a"]}))
+
+
+# -- days, months, and the calendar's inputs --------------------------------- #
+
+
+def test_events_per_day_covers_the_whole_span_including_the_empty_days(frame):
+    """Every day between the first and last event, not only the days with events.
+
+    This is the whole basis of the calendar chart. A series that carried only the
+    active days would make a fortnight away invisible, which is the one thing the
+    chart exists to show.
+    """
+    daily = analyze.events_per_day(frame)
+    first, last = analyze.time_span(frame)
+    assert daily.index[0] == first.normalize()
+    assert daily.index[-1] == last.normalize()
+    assert (daily.index.to_series().diff().dropna().dt.days == 1).all()
+    assert daily.sum() == len(frame)
+    assert (daily >= 0).all()
+
+
+def test_active_days_counts_only_days_with_events(frame):
+    daily = analyze.events_per_day(frame)
+    active = analyze.active_days(frame)
+    assert len(active) == int((daily > 0).sum())
+    assert active.sum() == len(frame)
+    assert len(active) < len(daily)
+
+
+def test_month_start_snaps_to_the_first_of_the_month():
+    stamps = pd.Series(pd.to_datetime(["2021-03-17 13:45", "2021-04-01 00:00"], utc=True))
+    assert list(analyze.month_start(stamps)) == [
+        pd.Timestamp("2021-03-01", tz="UTC"),
+        pd.Timestamp("2021-04-01", tz="UTC"),
+    ]
+
+
+def test_month_range_is_inclusive_and_contiguous():
+    months = analyze.month_range(
+        pd.Timestamp("2021-01-15", tz="UTC"), pd.Timestamp("2021-04-02", tz="UTC")
+    )
+    assert list(months) == [pd.Timestamp(2021, month, 1, tz="UTC") for month in (1, 2, 3, 4)]
+
+
+def test_month_range_collapses_when_both_ends_are_in_one_month():
+    moment = pd.Timestamp("2021-02-14", tz="UTC")
+    assert len(analyze.month_range(moment, moment + pd.Timedelta(1, unit="h"))) == 1
+
+
+# -- transactions ------------------------------------------------------------ #
+
+
+def test_transactions_breaks_on_the_gap_threshold(frame):
+    """Sessions are contiguous runs of events; a quiet minute ends one.
+
+    The threshold is a judgement call and it is the one number that decides what
+    this chart means, so it is a named constant rather than a literal buried in
+    the function, and the chart prints it.
+    """
+    assert analyze.SESSION_GAP_SECONDS == 60.0
+    table = analyze.transactions(frame)
+    assert list(table.columns) == ["start", "end", "events", "packages"]
+    assert table["events"].sum() == len(frame)
+    assert (table["events"] > 0).all()
+    assert (table["packages"] <= table["events"]).all()
+
+
+def test_a_wider_threshold_never_increases_the_session_count(frame):
+    """Monotone in the threshold: a longer quiet period can only merge sessions."""
+    narrow = len(analyze.transactions(frame, gap_seconds=0))
+    default = len(analyze.transactions(frame))
+    wide = len(analyze.transactions(frame, gap_seconds=3600))
+    assert wide <= default <= narrow
+    assert narrow >= 1
+
+
+def test_transactions_carry_their_boundaries(frame):
+    table = analyze.transactions(frame)
+    ordered = table.sort_values("start")
+    assert (ordered["start"].to_numpy() <= ordered["end"].to_numpy()).all()
+    # Consecutive sessions must not overlap, or the same event is in two of them.
+    assert (ordered["start"].to_numpy()[1:] >= ordered["end"].to_numpy()[:-1]).all()
+
+
+def test_transaction_size_summary_describes_the_sessions(frame):
+    summary = analyze.transaction_size_summary(frame)
+    sizes = analyze.transactions(frame)["packages"]
+    assert summary["count"] == len(sizes)
+    assert summary["50%"] == sizes.median()
+    assert summary["max"] == sizes.max()
+    assert summary["min"] >= 1
+    # A session cannot touch more distinct packages than it has events.
+    assert sizes.max() <= len(frame)
+
+
+def test_transactions_per_month_partitions_the_sessions(frame):
+    monthly = analyze.transactions_per_month(frame)
+    assert monthly["sessions"].sum() == len(analyze.transactions(frame))
+    assert monthly["events"].sum() == len(frame)
+    assert monthly.index.is_monotonic_increasing
+
+
+# -- the pooled interval distribution ---------------------------------------- #
+
+
+def test_upgrade_interval_distribution_shares_sum_to_one_hundred(frame):
+    table = analyze.upgrade_interval_distribution(frame)
+    assert table["count"].sum() == len(analyze.upgrade_intervals(frame))
+    assert table["share"].sum() == pytest.approx(100.0)
+    assert (table["low_days"] < table["high_days"]).all()
+    assert (table["low_days"] > 0).all()
+
+
+def test_upgrade_interval_distribution_starts_at_the_shortest_real_interval(frame):
+    """The first bin opens at the smallest positive gap, so nothing is off-scale.
+
+    A zero-day interval -- two upgrades in the same second -- is below that edge,
+    which is why the counts are computed on clipped values: ``np.histogram``
+    discards anything outside the edges rather than counting it in the nearest bin.
+    """
+    table = analyze.upgrade_interval_distribution(frame)
+    days = analyze.upgrade_intervals(frame)["interval_days"]
+    assert table["low_days"].iloc[0] == pytest.approx(days[days > 0].min())
+    assert table["count"].iloc[0] > 0
+    assert (table["low_days"] < table["high_days"]).all()
+
+
+def test_upgrade_interval_distribution_is_empty_without_upgrades():
+    frame = pd.DataFrame(
+        {
+            "package": ["a", "a"],
+            "timestamp": pd.to_datetime(["2021-01-01", "2021-02-01"], utc=True),
+            "action": ["installed", "removed"],
+        }
+    )
+    assert analyze.upgrade_interval_distribution(frame).empty
+
+
+# -- installed set over time -------------------------------------------------- #
+
+
+def test_installed_over_time_ends_at_as_of_not_the_month_boundary(frame):
+    """The last row is the state right now, so it equals the headline numbers."""
+    table = analyze.installed_over_time(frame, AS_OF)
+    final = table.iloc[-1]
+    assert final.name == AS_OF
+    assert int(final["installed"]) == len(analyze.currently_installed(frame, AS_OF))
+    assert int(final["ever_seen"]) == analyze.distinct_packages(frame)
+
+
+def test_installed_over_time_never_exceeds_ever_seen(frame):
+    table = analyze.installed_over_time(frame, AS_OF)
+    assert (table["installed"] <= table["ever_seen"]).all()
+    assert (table["ever_seen"].diff().dropna() >= 0).all()  # a package is seen once
+
+
+def test_installed_over_time_counts_a_removed_and_reinstalled_package_once(frame):
+    """A period is in force while start <= t <= end, so a gap is not two packages."""
+    table = analyze.installed_over_time(frame, AS_OF)
+    assert (table["installed"] >= 0).all()
+    assert table["installed"].max() <= table["ever_seen"].max()
+
+
+# -- staleness --------------------------------------------------------------- #
+
+
+def test_staleness_now_is_days_since_the_last_event(frame):
+    now = analyze.staleness_now(frame, AS_OF)
+    assert now.index.name == "package"
+    assert set(now.index) == set(frame["package"])
+    last = frame.groupby("package")["timestamp"].max()
+    assert (now >= 0).all()
+    # A package touched at the first instant of the log is the stalest thing here,
+    # and its score has to be the whole span rather than something shorter.
+    oldest = now.idxmax()
+    assert now[oldest] == pytest.approx((AS_OF - last[oldest]).total_seconds() / 86400)
+    assert now[oldest] >= now.min()
+
+
+def test_staleness_is_measured_at_month_ends_so_it_is_never_negative(frame):
+    """The bug this closes: measured at a month *start* a package touched on the
+    20th scores minus twenty days, and 2 546 such cells came out negative."""
+    grid = analyze.package_staleness(frame, AS_OF)
+    finite = grid.days[~pd.isna(grid.days)]
+    assert (finite >= 0).all()
+    assert len(finite)
+
+
+def test_staleness_leaves_pre_install_months_empty(frame):
+    """A cell for a month that closed before the package existed is NaN, not zero.
+
+    The predicate is the month's *closing* boundary, not its start: a package
+    installed on the 12th is measured for that whole month, because the cell asks
+    what the state was when the month handed over. Testing against the month start
+    instead would demand a blank for the month the package arrived in.
+    """
+    grid = analyze.package_staleness(frame, AS_OF)
+    firsts = frame.groupby("package")["timestamp"].min()
+    closes = pd.DatetimeIndex(grid.months + pd.offsets.MonthBegin(1))
+    for index, package in enumerate(grid.packages):
+        row = grid.days[index]
+        before = [c for c, close in enumerate(closes) if close < firsts[package]]
+        assert pd.isna(row[before]).all(), package
+        assert not pd.isna(row[len(before) :]).any(), package
+        assert before == list(range(len(before)))  # the blanks are a prefix, not a hole
+
+
+def test_staleness_counts_a_package_from_its_first_event_not_its_first_install(frame):
+    """A package first seen mid-upgrade existed before the log knew about it.
+
+    ``st`` arrives in the fixture as an ``upgraded`` event, so ``install_periods``
+    has no install to point at and reports 2021 as its first period. Reading that
+    into the heatmap would blank four years of a package that was plainly there.
+    The grid measures from the first *event*, which understates nothing.
+    """
+    grid = analyze.package_staleness(frame, AS_OF)
+    row = grid.days[grid.packages.index("st")]
+    first = frame.loc[frame["package"] == "st", "timestamp"].min()
+    assert first.year == 2016 and first.month == 12
+    # Blank for the nine months before it was first seen, measured from then on --
+    # four more years of history than the install period knows about.
+    assert pd.isna(row[:9]).all()
+    assert not pd.isna(row[9:]).any()
+    assert analyze.install_periods(frame, AS_OF).query("package == 'st'")["start"].min().year == 2021
+
+
+def test_staleness_last_column_is_the_current_staleness(frame):
+    grid = analyze.package_staleness(frame, AS_OF)
+    now = analyze.staleness_now(frame, AS_OF)
+    assert grid.days[:, -1] == pytest.approx(now.reindex(grid.packages).to_numpy())
+
+
+def test_staleness_carries_the_last_known_event_forward(frame):
+    """Every cell is "boundary minus the most recent event before that boundary".
+
+    Checked by brute force rather than by a property of the fast path. The tempting
+    property -- staleness only ever goes up -- is false, and a test asserting it
+    would have passed for the wrong reason: staleness *must* drop in a month where
+    the package was touched, which is the entire point of the metric. gptfdisk
+    falls from 475 days to 2 in July 2017 for exactly that reason.
+    """
+    grid = analyze.package_staleness(frame, AS_OF)
+    boundaries = pd.DatetimeIndex(grid.months + pd.offsets.MonthBegin(1))
+    boundaries = boundaries.where(boundaries <= grid.as_of, grid.as_of)
+    for index, package in enumerate(grid.packages):
+        stamps = frame.loc[frame["package"] == package, "timestamp"]
+        for column, boundary in enumerate(boundaries):
+            earlier = stamps[stamps < boundary]
+            value = grid.days[index, column]
+            if earlier.empty:
+                assert np.isnan(value), (package, boundary)
+            else:
+                expected = (boundary - earlier.max()).total_seconds() / 86400
+                assert value == pytest.approx(expected), (package, boundary)
+
+
+def test_staleness_survives_a_month_with_no_events_at_all():
+    """The regression: a month nothing happened in has no column to reindex from.
+
+    Reindexing a grid onto a month range adds the missing column as an all-NaN
+    column with no dtype to infer, so it arrives as ``object`` and the numpy
+    conversion downstream raises. The author's log has one such month, July 2019.
+    """
+    rows = [
+        ("a", "2019-06-15", "installed"),
+        ("a", "2019-09-02", "upgraded"),
+    ]
+    frame = pd.DataFrame(rows, columns=["package", "stamp", "action"])
+    frame["timestamp"] = pd.to_datetime(frame["stamp"], utc=True)
+    frame = frame.drop(columns="stamp")
+
+    grid = analyze.package_staleness(frame, pd.Timestamp("2019-10-01", tz="UTC"))
+    july = grid.months.searchsorted(pd.Timestamp("2019-07-01", tz="UTC"))
+    assert july in range(len(grid.months))
+    # The month exists, is finite, and is one month further on than June's.
+    assert grid.days[0, july] == pytest.approx(grid.days[0, july - 1] + 30, abs=2)
+
+
+def test_staleness_row_order_is_a_choice_and_first_seen_is_chronological(frame):
+    by_name = analyze.package_staleness(frame, AS_OF)
+    by_arrival = analyze.package_staleness(frame, AS_OF, order="first_seen")
+
+    assert by_name.packages == sorted(by_name.packages)
+    firsts = frame.groupby("package")["timestamp"].min()
+    ordered = [firsts[p] for p in by_arrival.packages]
+    assert ordered == sorted(ordered)
+    # Same packages either way; only the rows move.
+    assert sorted(by_arrival.packages) == sorted(by_name.packages)
+    assert by_arrival.days.shape == by_name.days.shape
+
+
+def test_staleness_first_seen_breaks_ties_on_the_name():
+    """Two packages installed in the same instant must have a stable order."""
+    moment = pd.Timestamp("2021-01-01", tz="UTC")
+    frame = pd.DataFrame(
+        {
+            "package": ["b", "a", "c"],
+            "timestamp": [moment, moment, moment + pd.Timedelta(1, unit="h")],
+            "action": ["installed"] * 3,
+        }
+    )
+    assert analyze.package_staleness(frame, AS_OF, order="first_seen").packages == ["a", "b", "c"]
+
+
+def test_staleness_rejects_an_unknown_order(frame):
+    with pytest.raises(ValueError, match="order"):
+        analyze.package_staleness(frame, AS_OF, order="by-vibes")
+
+
+def test_staleness_describe_reports_percentiles():
+    grid = analyze.package_staleness(big_frame(), AS_OF)
+    described = grid.described()
+    assert set(described) == {"median", "p90", "max"}
+    assert described["median"] <= described["p90"] <= described["max"]
+    assert described["max"] > 0
+
+
+def big_frame() -> pd.DataFrame:
+    """200 packages, so the heatmap's geometry is exercised on more than a handful."""
+    rows = []
+    start = pd.Timestamp("2016-01-01", tz="UTC")
+    for index in range(200):
+        name = f"pkg{index:04d}"
+        rows.append((name, start, "installed"))
+        rows.append((name, start + pd.Timedelta(index, unit="D"), "upgraded"))
+    frame = pd.DataFrame(rows, columns=["package", "timestamp", "action"])
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    return frame
+
+
+# -- the base install -------------------------------------------------------- #
+
+
+def test_initial_install_packages_is_the_whole_base_system(frame):
+    base = analyze.initial_install_packages(frame)
+    start, end = analyze.initial_install_window(frame)
+    assert not base.empty
+    assert (base["start"] >= start).all() and (base["start"] <= end).all()
+    assert base["package"].is_unique
+    assert list(base.columns) == ["package", "start"]
+
+
+def test_initial_install_packages_is_not_the_still_installed_subset(frame):
+    """474 arrived with the machine and 331 are still on it; the two differ."""
+    base = analyze.initial_install_packages(frame)
+    whole = analyze.installed_whole_time(frame, AS_OF)
+    assert len(base) > len(whole)
+    assert set(whole["package"]) < set(base["package"])
+
+
+def test_initial_install_packages_handles_an_empty_log():
+    from paclog.loader import empty_frame
+
+    assert analyze.initial_install_packages(empty_frame()).empty

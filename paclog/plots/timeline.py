@@ -36,7 +36,7 @@ def stable_unit(name: str) -> float:
     "timeline",
     "timeline.svg",
     "Package Installation Periods",
-    "when each package was installed (excluded from `paclog plot` by default)",
+    "when each package was installed, with every install period drawn",
     default=False,
 )
 def timeline(frame: pd.DataFrame, ctx: Context):

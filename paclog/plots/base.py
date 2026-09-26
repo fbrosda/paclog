@@ -31,15 +31,22 @@ ACTION_COLORS: dict[str, str] = {
 ACTION_COLOR_LIST: list[str] = [ACTION_COLORS[a.value] for a in ACTION_ORDER]
 
 #: Figure sizes in inches. These are the notebook's, chosen over the script's
-#: larger ones because 32x18 renders unreadable text in a browser.
+#: larger ones because 32x18 renders unreadable text in a browser. Two entries are
+#: only a floor: ``staleness-heatmap`` and ``timeline`` both size themselves to the
+#: data, because a row per package is the whole point of them.
 FIG_SIZES: dict[str, tuple[float, float]] = {
     "events-per-hour": (14, 8),
     "events-per-weekday": (12, 6),
     "events-per-month": (16, 15),
     "action-distribution": (7, 7),
     "upgrade-interval": (7, 10),
+    "upgrade-interval-distribution": (12, 7),
     "installed-whole-time": (7, 8),
     "package-lifetime": (7, 10),
+    "installed-set-size": (14, 8),
+    "transactions": (14, 9),
+    "activity-calendar": (16, 12),
+    "staleness-heatmap": (16, 20),
     "top-packages": (16, 12),
     "timeline": (16, 20),
 }
@@ -95,7 +102,7 @@ def finish(ax, *, xgrid: bool = False, ygrid: bool = True) -> None:
         ax.grid(True, axis="x", **{k: v for k, v in GRID_KWARGS.items() if k != "axis"})
 
 
-def save(fig, out_dir: Path, filename: str) -> Path:
+def save(fig, out_dir: Path, filename: str, dpi: int | None = None) -> Path:
     """Write a figure as SVG, creating the output directory if needed.
 
     ``out_dir`` is created here because the original scripts assumed it already
@@ -105,11 +112,17 @@ def save(fig, out_dir: Path, filename: str) -> Path:
     otherwise stamps into every SVG. Together with ``svg.hashsalt`` that is what
     makes two runs over unchanged data produce byte-identical files, so charts can
     be committed and diffed.
+
+    ``dpi`` reaches rasterized artists only, which is the point of it. A chart
+    that is 700 inches tall embeds its cells at 100 dpi as one blurry smear, and
+    the dpi that makes a cell land on its own pixel is a property of that chart
+    rather than of the house style. Charts that are pure vector leave it ``None``
+    and are byte-for-byte unaffected.
     """
     apply_style()
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / filename
-    fig.savefig(path, format="svg", bbox_inches="tight", metadata={"Date": None})
+    fig.savefig(path, format="svg", bbox_inches="tight", metadata={"Date": None}, dpi=dpi)
     plt.close(fig)
     return path
 
