@@ -116,9 +116,21 @@ compare rendered images.
 
 ## Docs
 
-`README.org` is Emacs org-mode, not markdown (`#+title:`, `~code~`,
-`[[file:...]]` links) — don't "fix" it with markdown syntax. The notebook markdown
-is the narrative version of the same material; `paclog.ipynb` is written for the
-author's personal history (Arch installed 03/12/2016, ~68.5k events), so its
-commentary about habits does not generalize to other machines. Its code cells call
-`paclog.plots` and `paclog.analyze` directly, so they cannot drift from the CLI.
+`README.md` is the documentation, and it is markdown. It was `README.org` until the
+0.3 work, and the conversion was not cosmetic:
+
+- **PyPI was the reason.** setuptools has no content type for `.org`, so the
+  `readme` field had to be `content-type = "text/plain"`, which renders the raw
+  markup — `#+title:`, `~code~`, `[[file:...]]` — on the package page.
+- **GitHub was not a reason.** Linguist renders org-mode, so the repo page was
+  already fine. The `[[file:...]]` links were the one thing org cost on GitHub:
+  they render as plain text, not links, so `paclog.ipynb` and `LICENSE` were
+  unreachable from the README either way.
+- If you edit prose, keep the two-spaces-after-a-full-stop style; it is the
+  author's org habit and predates the conversion.
+
+The notebook markdown is the narrative version of the same material;
+`paclog.ipynb` is written for the author's personal history (Arch installed
+03/12/2016, ~68.5k events), so its commentary about habits does not generalize to
+other machines. Its code cells call `paclog.plots` and `paclog.analyze` directly,
+so they cannot drift from the CLI.
