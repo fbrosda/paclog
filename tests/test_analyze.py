@@ -240,6 +240,186 @@ def test_package_lifetime_is_sorted_longest_first(frame):
     assert (lifetimes["days"] >= 0).all()
 
 
+def test_package_lifetime_flags_the_periods_that_never_ended(frame):
+    """Right-censoring is a property of the observation, so it rides along with it.
+
+    gptfdisk is still installed, so its 1 854 days is a lower bound. tzdata was
+    removed after 82 minutes, so its number is a lifetime. Ranking the two as
+    if they were the same measurement is what made the lifetime chart useless.
+    """
+    lifetimes = analyze.package_lifetime(frame, AS_OF)
+    censored = lifetimes.set_index("package")["censored"]
+    assert censored["gptfdisk"]
+    assert not censored["tzdata"]
+    assert not censored["filesystem"]
+
+
+# -- the two lifetime views -------------------------------------------------- #
+
+
+def test_initial_install_window_ends_at_the_last_event_before_the_quiet_stretch(frame):
+    """The fixture's build runs 10:53-12:15 on 2016-03-12, then goes quiet for 9 months.
+
+    The window ends on the last event *before* the silence. Ending it on the
+    first event after would swallow the next session, which is a different era
+    of the machine's life and not part of the original system.
+    """
+    start, end = analyze.initial_install_window(frame)
+    assert start == pd.Timestamp("2016-03-12 10:53", tz="UTC")
+    assert end == pd.Timestamp("2016-03-12 12:15", tz="UTC")
+
+
+def test_initial_install_window_falls_back_to_the_first_day_with_no_quiet_stretch():
+    """A machine touched twice a day has no era boundary to find.
+
+    The fallback is the first calendar day, because "this arrived with the
+    system" is a stronger claim than a log with no silent day can support.
+    """
+    twice_daily = pd.DataFrame(
+        {
+            "package": [f"pkg{i}" for i in range(20)],
+            "timestamp": pd.date_range("2020-01-01", periods=20, freq="12h", tz="UTC"),
+            "action": ["installed"] * 20,
+            "version_before": [None] * 20,
+            "version_after": ["1-1"] * 20,
+        }
+    )
+    start, end = analyze.initial_install_window(twice_daily)
+    assert start == pd.Timestamp("2020-01-01", tz="UTC")
+    assert end == pd.Timestamp("2020-01-02", tz="UTC")
+
+
+def test_initial_install_window_collapses_when_events_are_a_day_apart():
+    """One event per day is a day-long silence between every pair of them.
+
+    So the build window is the single instant of the first event, and only what
+    was installed in that instant counts as having come with the machine. The
+    conservative outcome, the same reading as the fallback above.
+    """
+    daily = pd.DataFrame(
+        {
+            "package": [f"pkg{i}" for i in range(10)],
+            "timestamp": pd.date_range("2020-01-01", periods=10, freq="D", tz="UTC"),
+            "action": ["installed"] * 10,
+            "version_before": [None] * 10,
+            "version_after": ["1-1"] * 10,
+        }
+    )
+    start, end = analyze.initial_install_window(daily)
+    assert start == end == pd.Timestamp("2020-01-01", tz="UTC")
+
+
+def test_installed_whole_time_is_exactly_the_never_removed_base_system(frame):
+    """gptfdisk and nothing else.
+
+    filesystem and tzdata were installed during the build too, but both were
+    removed, so neither is installed the whole time. st is still installed, but
+    it arrived in 2021, five years into the log.
+    """
+    assert analyze.installed_whole_time(frame, AS_OF)["package"].tolist() == ["gptfdisk"]
+
+
+def test_installed_whole_time_excludes_a_package_removed_and_reinstalled():
+    """Present now and present at the build is not the same as present throughout.
+
+    A removal in the middle splits the history in two. The package's open period
+    starts at the reinstall, which is outside the window, so it is not on the
+    list -- and the completed period it left behind does not drag it back on.
+    """
+    frame = pd.DataFrame(
+        {
+            "package": ["keeper", "churn", "churn", "churn", "late"],
+            "timestamp": pd.to_datetime(
+                [
+                    "2016-03-12 10:00",  # build: two packages arrive
+                    "2016-03-12 10:00",
+                    "2020-05-05 12:00",  # churn is removed
+                    "2021-01-01 09:00",  # and put back, so it is present again
+                    "2016-06-06 08:00",  # late arrives after the build
+                ],
+                utc=True,
+            ),
+            "action": ["installed", "installed", "removed", "installed", "installed"],
+            "version_before": [None, None, "1-1", None, None],
+            "version_after": ["1-1", "1-1", None, "1-1", "1-1"],
+        }
+    )
+    as_of = pd.Timestamp("2026-01-01", tz="UTC")
+    assert analyze.installed_whole_time(frame, as_of)["package"].tolist() == ["keeper"]
+
+
+def test_installed_whole_time_is_returned_alphabetically():
+    """It is drawn as a list, so the order has to mean something."""
+    whole = analyze.installed_whole_time(big_install_frame(), AS_OF)
+    assert len(whole) == 60
+    assert whole["package"].is_monotonic_increasing
+
+
+def test_completed_lifetimes_excludes_still_installed_packages(frame):
+    """The only periods with a real lifetime are the ones that ended."""
+    completed = analyze.completed_lifetimes(frame, AS_OF)
+    assert completed["package"].tolist() == ["filesystem", "tzdata"]
+    assert not completed["censored"].any()
+    assert len(completed) < len(analyze.package_lifetime(frame, AS_OF))
+
+
+def test_the_two_lifetime_views_never_describe_the_same_period(frame):
+    """The split is by censoring, so no period can be in both.
+
+    Not quite the same as the two package sets being disjoint, and deliberately
+    so: a package that was removed and reinstalled during the build has one
+    completed period *and* one that never ended, and the author's log contains
+    exactly one of those (``xf86-input-synaptics``, out and back four minutes
+    later). It belongs on the whole-time list and its stale period is still a
+    completed lifetime. What must hold is that the whole-time periods themselves
+    are never ranked as completed ones.
+    """
+    lifetimes = analyze.package_lifetime(frame, AS_OF)
+    _, window_end = analyze.initial_install_window(frame)
+    whole = lifetimes[lifetimes["censored"] & (lifetimes["start"] <= window_end)]
+    completed = analyze.completed_lifetimes(frame, AS_OF)
+    keys = lambda table: set(zip(table["package"], table["start"]))
+    assert keys(whole) & keys(completed) == set()
+    assert len(whole) == len(analyze.installed_whole_time(frame, AS_OF))
+
+
+def big_install_frame() -> pd.DataFrame:
+    """60 packages that all arrived at the first instant and were never removed.
+
+    The shape that made the original lifetime chart useless: 60 censored periods
+    whose days are all the length of the log, and 3 completed ones that vary.
+    """
+    start = pd.Timestamp("2016-01-01", tz="UTC")
+    rows = [(f"base{i:02d}", start, "installed") for i in range(60)]
+    for index, days in enumerate((30, 200, 900)):
+        began = start + pd.Timedelta(index, unit="D")
+        rows.append((f"gone{index}", began, "installed"))
+        rows.append((f"gone{index}", began + pd.Timedelta(days, unit="D"), "removed"))
+    frame = pd.DataFrame(rows, columns=["package", "timestamp", "action"])
+    frame["version_before"] = None
+    frame["version_after"] = "1-1"
+    return frame
+
+
+def test_ranking_every_period_together_is_the_bug_the_split_avoids():
+    """Pin the pathology itself, not just the fix.
+
+    Ranking all periods by length puts the 60 still-installed base packages on
+    top, every one of them the same length, and pushes all three real lifetimes
+    off the chart. That is the chart the user reported: 40 identical bars.
+    """
+    as_of = pd.Timestamp("2026-01-01", tz="UTC")
+    frame = big_install_frame()
+
+    everything = analyze.package_lifetime(frame, as_of).head(40)
+    assert everything["days"].nunique() == 1
+    assert len(everything) == 40
+
+    completed = analyze.completed_lifetimes(frame, as_of)
+    assert completed["days"].tolist() == [900, 200, 30]
+    assert len(analyze.installed_whole_time(frame, as_of)) == 60
+
+
 def test_long_gaps_finds_the_idle_stretch(frame):
     gaps = analyze.long_gaps(frame, days=300)
     assert len(gaps) >= 1

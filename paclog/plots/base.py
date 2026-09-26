@@ -38,6 +38,7 @@ FIG_SIZES: dict[str, tuple[float, float]] = {
     "events-per-month": (16, 15),
     "action-distribution": (7, 7),
     "upgrade-interval": (7, 10),
+    "installed-whole-time": (7, 8),
     "package-lifetime": (7, 10),
     "top-packages": (16, 12),
     "timeline": (16, 20),

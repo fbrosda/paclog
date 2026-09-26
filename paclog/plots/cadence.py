@@ -1,11 +1,15 @@
-"""Charts about *how often* things happen."""
+"""Charts about *how often* things happen.
+
+Install-period lengths live in :mod:`paclog.plots.lifetime` instead, which needs
+two charts to say one thing properly.
+"""
 
 from __future__ import annotations
 
 import pandas as pd
 
 from .. import analyze
-from .base import colors_for, figure, finish
+from .base import figure
 from .registry import Context, chart
 
 
@@ -41,33 +45,6 @@ def upgrade_interval(frame: pd.DataFrame, ctx: Context):
     ax.tick_params(axis="x", labelrotation=90, labelsize=7)
     ax.yaxis.grid(True, alpha=0.25, linewidth=0.8)
     ax.xaxis.grid(False)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    return fig
-
-
-@chart(
-    "package-lifetime",
-    "package_lifetime.svg",
-    "How Long Packages Stay Installed",
-    "days per install period, longest first",
-)
-def package_lifetime(frame: pd.DataFrame, ctx: Context):
-    lifetimes = analyze.package_lifetime(frame, ctx.as_of)
-    fig = figure("package-lifetime")
-    ax = fig.add_subplot(111)
-    if lifetimes.empty:
-        ax.text(0.5, 0.5, "no install periods", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("Install period length")
-        return fig
-
-    top = lifetimes.head(40).iloc[::-1]
-    ax.barh(top["package"], top["days"], color=colors_for(["upgraded"] * len(top)))
-    ax.set_xlabel("Days installed")
-    ax.set_ylabel("Package")
-    ax.set_title("Install period length (longest 40)")
-    ax.xaxis.grid(True, alpha=0.25, linewidth=0.8)
-    ax.yaxis.grid(False)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     return fig

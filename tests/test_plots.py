@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import matplotlib
+import matplotlib.pyplot as plt
+import pandas as pd
 import pytest
 
 from paclog import analyze, plots
@@ -18,6 +20,18 @@ AS_OF = datetime(2021, 4, 10, tzinfo=timezone.utc)
 @pytest.fixture
 def ctx() -> Context:
     return Context(as_of=datetime(2021, 4, 10, tzinfo=timezone.utc), seed=0, options={"top_n": 150})
+
+
+@pytest.fixture(autouse=True)
+def close_figures():
+    """Rendering tests each leak a figure, and matplotlib warns past 20 open.
+
+    ``paclog.plot`` closes its own figures in ``save``; a test that calls
+    ``render`` directly keeps the figure, so without this the suite trips the
+    warning as soon as it grows past a certain number of chart tests.
+    """
+    yield
+    plt.close("all")
 
 
 def test_registry_is_populated():
@@ -160,6 +174,178 @@ def test_timeline_height_grows_to_fit_rather_than_capping_rows(big_frame):
     height = fig.get_size_inches()[1]
     assert height == pytest.approx(INCHES_PER_PACKAGE * big_packages(big_frame))
     assert height < MAX_TIMELINE_HEIGHT_IN  # 400 packages must not hit the ceiling
+
+
+# -- install-period lifetime charts ----------------------------------------- #
+
+
+def names_drawn(fig) -> list[str]:
+    """The package names on the whole-time chart, which is text rather than bars."""
+    return [t.get_text() for t in fig.axes[0].texts if t.get_fontfamily() == ["monospace"]]
+
+
+def test_installed_whole_time_lists_every_qualifying_package(frame, ctx):
+    """A list chart has to list all of them.
+
+    331 of 2 808 packages qualify on the author's log, and the chart is the only
+    place that set exists, so dropping names to keep the page tidy would drop the
+    entire content of the chart.
+    """
+    whole = analyze.installed_whole_time(frame, ctx.as_of)
+    fig = render("installed-whole-time", frame, ctx)
+    drawn = names_drawn(fig)
+    assert sorted(drawn) == sorted(whole["package"])
+    assert len(drawn) == len(set(drawn)) == len(whole)
+
+
+def test_installed_whole_time_never_drops_a_name(big_frame, ctx):
+    """400 packages, all installed together and never removed: all 400 are drawn.
+
+    The list chart lays names out in columns rather than capping them, for the
+    same reason the timeline draws every row.
+    """
+    expected = analyze.installed_whole_time(big_frame, ctx.as_of)
+    assert len(expected) == 400
+    fig = render("installed-whole-time", big_frame, ctx)
+    assert len(names_drawn(fig)) == 400
+    # More names means a taller page, not a smaller font and fewer names.
+    assert fig.get_size_inches()[1] > 6.0
+
+
+def test_installed_whole_time_names_do_not_collide(frame, ctx):
+    """Column pitch has to clear the longest name in the data.
+
+    ``ca-certificates-mozilla`` is 23 characters, and monospace 7pt is 0.065in per
+    character, so a column narrower than about 1.7in runs the longest names into
+    their neighbour. Nothing asserts this by eye, so it is asserted here.
+    """
+    from paclog.plots.lifetime import COLUMN_WIDTH_IN, NAME_FONTSIZE, ROW_HEIGHT_IN
+
+    fig = render("installed-whole-time", frame, ctx)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    boxes = [t.get_window_extent(renderer) for t in fig.axes[0].texts if t.get_fontfamily() == ["monospace"]]
+    assert not any(a.overlaps(b) for i, a in enumerate(boxes) for b in boxes[i + 1 :])
+
+    widest_in = max(b.width for b in boxes) / fig.dpi
+    assert COLUMN_WIDTH_IN > widest_in
+    assert fig.dpi * ROW_HEIGHT_IN > max(b.height for b in boxes)
+    assert NAME_FONTSIZE > 0
+
+
+def test_installed_whole_time_keeps_every_name_inside_the_canvas(frame, ctx):
+    """The axes has to span the figure, or the last columns are silently cropped."""
+    fig = render("installed-whole-time", frame, ctx)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    width, height = fig.canvas.get_width_height()
+    for text in fig.axes[0].texts:
+        box = text.get_window_extent(renderer)
+        assert box.x0 >= 0 and box.x1 <= width
+        assert box.y0 >= 0 and box.y1 <= height
+
+
+def test_installed_whole_time_reads_alphabetically(frame, ctx):
+    """Column-major fill, so reading down a column and across stays alphabetical."""
+    fig = render("installed-whole-time", frame, ctx)
+    by_position = sorted(
+        fig.axes[0].texts,
+        key=lambda t: (t.get_position()[0], -t.get_position()[1]),
+    )
+    drawn = [t.get_text() for t in by_position if t.get_fontfamily() == ["monospace"]]
+    assert drawn == sorted(drawn)
+
+
+def test_package_lifetime_ranks_only_periods_that_ended(frame, ctx):
+    """The bars are completed lifetimes, longest at the top.
+
+    gptfdisk is the fixture's still-installed package. It is absent here and
+    present on ``installed-whole-time``, which is the whole split.
+    """
+    completed = analyze.completed_lifetimes(frame, ctx.as_of)
+    fig = render("package-lifetime", frame, ctx)
+    ax = fig.axes[0]
+    assert [t.get_text() for t in ax.get_yticklabels()] == list(completed["package"].iloc[::-1])
+    assert len(ax.patches) == len(completed)
+    assert "gptfdisk" not in {t.get_text() for t in ax.get_yticklabels()}
+
+
+def test_package_lifetime_bars_are_not_all_the_same_length(censored_frame, ctx):
+    """The regression this rework exists for.
+
+    60 packages installed at the first instant and never removed all score
+    exactly the length of the log, so ranking every period put 40 identical bars
+    on the chart and pushed the three real lifetimes off the bottom. The ranked
+    periods must now differ from each other.
+    """
+    fig = render("package-lifetime", censored_frame, ctx)
+    widths = [p.get_width() for p in fig.axes[0].patches]
+    assert len(widths) == 3
+    assert len(set(widths)) == 3
+    assert sorted(widths) == [30, 200, 900]
+
+
+def test_package_lifetime_caps_at_forty_and_says_so(many_completed_frame, ctx):
+    """A summary view, labelled as one: the title carries the count it ranked from."""
+    from paclog.plots.lifetime import TOP_PERIODS
+
+    completed = analyze.completed_lifetimes(many_completed_frame, ctx.as_of)
+    assert len(completed) == 50
+    fig = render("package-lifetime", many_completed_frame, ctx)
+    assert len(fig.axes[0].patches) == TOP_PERIODS
+    assert f"top {TOP_PERIODS} of {len(completed)}" in fig.axes[0].get_title()
+
+
+def test_lifetime_charts_handle_a_log_with_no_completed_periods(never_removed_frame, ctx):
+    """Both charts have to render the empty case rather than raise."""
+    assert analyze.completed_lifetimes(never_removed_frame, ctx.as_of).empty
+    assert render("package-lifetime", never_removed_frame, ctx).axes
+    assert render("installed-whole-time", never_removed_frame, ctx).axes
+
+
+def _lifetime_frame(rows) -> pd.DataFrame:
+    frame = pd.DataFrame(rows, columns=["package", "timestamp", "action"])
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    frame["version_before"] = None
+    frame["version_after"] = "1-1"
+    return frame
+
+
+@pytest.fixture
+def censored_frame():
+    """60 never-removed packages installed together, plus 3 that were removed.
+
+    This is the shape that produced 40 identical bars: every still-installed
+    package scores exactly ``as_of - installed``, so ranking all periods together
+    put the base system on top and hid the only three lifetimes that vary.
+    """
+    installed = pd.Timestamp("2016-01-01", tz="UTC")
+    rows = [(f"base{i:02d}", installed, "installed") for i in range(60)]
+    for index, days in enumerate((30, 200, 900)):
+        start = installed + pd.Timedelta(index + 1, unit="D")
+        rows.append((f"gone{index}", start, "installed"))
+        rows.append((f"gone{index}", start + pd.Timedelta(days, unit="D"), "removed"))
+    return _lifetime_frame(rows)
+
+
+@pytest.fixture
+def many_completed_frame():
+    """50 completed periods of distinct lengths, to exercise the top-40 cap."""
+    installed = pd.Timestamp("2016-01-01", tz="UTC")
+    rows = []
+    for index in range(50):
+        start = installed + pd.Timedelta(index + 1, unit="D")
+        rows.append((f"pkg{index:02d}", start, "installed"))
+        rows.append((f"pkg{index:02d}", start + pd.Timedelta(index + 1, unit="D"), "removed"))
+    return _lifetime_frame(rows)
+
+
+@pytest.fixture
+def never_removed_frame():
+    """Nothing is ever removed, so there are no completed lifetimes to rank."""
+    installed = pd.Timestamp("2016-01-01", tz="UTC")
+    rows = [(f"pkg{index}", installed + pd.Timedelta(index, unit="h"), "installed") for index in range(5)]
+    return _lifetime_frame(rows)
 
 
 # -- monthly charts --------------------------------------------------------- #

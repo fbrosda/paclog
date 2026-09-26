@@ -17,11 +17,30 @@ from .model import ACTION_ORDER, Action
 #: One row per (package, install period).
 PERIOD_COLUMNS = ("package", "start", "end")
 
+#: A silence of at least this long with no package events ends the initial install
+#: window. One day is the shortest gap that reliably separates "provisioning the
+#: machine" from "using it": on the author's log the base install is followed by a
+#: 28 h pause, while the largest gap *inside* the provisioning burst is 10 h.
+INITIAL_WINDOW_GAP_DAYS = 1
+
 
 def _require(frame: pd.DataFrame) -> pd.DataFrame:
     if "timestamp" not in frame.columns:
         raise KeyError("frame has no 'timestamp' column; did you load it with paclog?")
     return frame
+
+
+def _as_of(as_of: datetime | pd.Timestamp, tz=None) -> pd.Timestamp:
+    """``as_of`` as an aware timestamp, localized into the frame's timezone.
+
+    Every function that closes an open install period needs this, and getting it
+    subtly differently in each one is how a naive ``as_of`` ends up comparing
+    instants instead of wall clocks.
+    """
+    stamp = pd.Timestamp(as_of)
+    if stamp.tzinfo is None:
+        stamp = stamp.tz_localize("UTC" if tz is None else tz)
+    return stamp
 
 
 def total_events(frame: pd.DataFrame) -> int:
@@ -165,11 +184,7 @@ def install_periods(frame: pd.DataFrame, as_of: datetime | pd.Timestamp) -> pd.D
     input rather than a hidden ``now()`` call.
     """
     frame = _require(frame)
-    end_default = pd.Timestamp(as_of)
-    if end_default.tzinfo is None and not frame.empty:
-        end_default = end_default.tz_localize(frame["timestamp"].dt.tz)
-    if end_default.tzinfo is None:
-        end_default = end_default.tz_localize("UTC")
+    end_default = _as_of(as_of, None if frame.empty else frame["timestamp"].dt.tz)
 
     if frame.empty:
         return pd.DataFrame({"package": [], "start": [], "end": []}).astype(
@@ -196,14 +211,105 @@ def install_periods(frame: pd.DataFrame, as_of: datetime | pd.Timestamp) -> pd.D
     return pd.DataFrame(periods, columns=list(PERIOD_COLUMNS))
 
 
+def initial_install_window(
+    frame: pd.DataFrame, days: int = INITIAL_WINDOW_GAP_DAYS
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    """The provisioning era: the span from the first event to the last event
+    before the log's first silence of at least ``days``.
+
+    Everything installed inside it belongs to the original system. Deriving the
+    end from the data rather than hardcoding "the first day" is what makes it
+    survive a slow install: on the author's log the base system arrives in four
+    transactions spread over 21 hours, and a fixed hour count would cut the
+    X.org stack off the list.
+
+    With no such silence anywhere in the log the machine was being touched at
+    least twice a day, so no era boundary exists to find and the window falls
+    back to the first calendar day -- the conservative reading, since claiming a
+    package arrived "with the system" is a stronger claim than the log supports.
+    A log with events exactly a day apart has a silence between every pair of
+    them, so its window collapses to the single instant of the first event.
+    """
+    frame = _require(frame)
+    if frame.empty:
+        return None, None
+
+    stamps = frame["timestamp"].sort_values(kind="stable").reset_index(drop=True)
+    start = stamps.iloc[0]
+    gaps = stamps.diff().to_numpy()
+    # ``diff`` puts each gap at its *later* event, so the window ends one row back:
+    # the silence starts after the last event that still belongs to the build.
+    quiet = np.flatnonzero(gaps >= pd.Timedelta(days, unit="D"))
+    if quiet.size:
+        end = stamps.iloc[int(quiet[0]) - 1]
+    else:
+        end = start.normalize() + pd.Timedelta(days, unit="D")
+    return start, end
+
+
 def package_lifetime(frame: pd.DataFrame, as_of: datetime | pd.Timestamp) -> pd.DataFrame:
-    """Days each install period lasted, longest first."""
+    """Days each install period lasted, longest first, flagged for censoring.
+
+    ``censored`` marks a period that had not ended at ``as_of``: the package was
+    still installed, so its ``days`` is a lower bound rather than a lifetime. The
+    two kinds are not comparable, which is why the flag is carried alongside the
+    number instead of being left for each caller to re-derive. See
+    :func:`completed_lifetimes` and :func:`installed_whole_time` for the two
+    charts that need the kinds apart.
+    """
     periods = install_periods(frame, as_of)
     if periods.empty:
-        return pd.DataFrame({"package": [], "days": []})
+        return pd.DataFrame({"package": [], "start": [], "end": [], "days": [], "censored": []})
     out = periods.copy()
     out["days"] = (out["end"] - out["start"]).dt.total_seconds() / 86400.0
+    out["censored"] = out["end"] >= _as_of(as_of, out["end"].dt.tz)
     return out.sort_values("days", ascending=False).reset_index(drop=True)
+
+
+def completed_lifetimes(frame: pd.DataFrame, as_of: datetime | pd.Timestamp) -> pd.DataFrame:
+    """Install periods that actually ended, longest first.
+
+    These are the only rows in :func:`package_lifetime` whose ``days`` is a
+    lifetime rather than a lower bound. Ranking the two kinds together is what
+    made the original lifetime chart useless: every still-installed package scores
+    ``as_of - installed``, so the longest bars were whichever packages happened to
+    be installed first, all pinned to the length of the log and all identical.
+    The author's log had 1 378 such packages against 2 278 completed periods, so
+    the top 40 was entirely censored -- 40 bars of exactly the same length.
+    """
+    lifetimes = package_lifetime(frame, as_of)
+    if lifetimes.empty:
+        return lifetimes
+    return lifetimes[~lifetimes["censored"]].reset_index(drop=True)
+
+
+def installed_whole_time(frame: pd.DataFrame, as_of: datetime | pd.Timestamp) -> pd.DataFrame:
+    """Packages that have been installed for the entire recorded history.
+
+    Two conditions, both required:
+
+    * the install period is still open at ``as_of`` -- the package was never
+      removed, so there is no completed period to rank it by;
+    * it opened inside the initial install window, so it was part of the system
+      as built rather than an arrival later on.
+
+    A package removed and later reinstalled satisfies neither: its open period
+    starts at the reinstall, so it is not on this list, which is the whole point
+    -- it was not installed the whole time.
+
+    Returned alphabetically, because the chart that draws it is a list.
+    """
+    lifetimes = package_lifetime(frame, as_of)
+    if lifetimes.empty:
+        return lifetimes[["package", "start", "days"]]
+    start, end = initial_install_window(frame)
+    if start is None:  # pragma: no cover - a non-empty frame always has a window
+        return lifetimes.iloc[0:0][["package", "start", "days"]]
+    inside = lifetimes["start"] >= start
+    if end is not None:
+        inside &= lifetimes["start"] <= end
+    whole = lifetimes[inside & lifetimes["censored"]]
+    return whole.sort_values("package").reset_index(drop=True)[["package", "start", "days"]]
 
 
 def currently_installed(frame: pd.DataFrame, as_of: datetime | pd.Timestamp) -> pd.Series:
@@ -211,9 +317,7 @@ def currently_installed(frame: pd.DataFrame, as_of: datetime | pd.Timestamp) -> 
     periods = install_periods(frame, as_of)
     if periods.empty:
         return pd.Series([], dtype=str, name="package")
-    cutoff = pd.Timestamp(as_of)
-    if cutoff.tzinfo is None:
-        cutoff = cutoff.tz_localize(periods["end"].dt.tz)
+    cutoff = _as_of(as_of, periods["end"].dt.tz)
     return periods[periods["end"] >= cutoff]["package"].drop_duplicates().rename("package")
 
 

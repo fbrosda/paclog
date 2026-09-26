@@ -65,6 +65,21 @@ tests/          pytest, driven by a hand-written fixtures/pacman.log
 - **`analyze.install_periods` treats an `installed` with no matching `removed` as
   running until `as_of`.** `as_of` defaults to `max(timestamp)` in the data, not
   `now()`, precisely so re-runs are stable. `--as-of now` opts back in.
+- **Never rank install periods by length without splitting on censoring.**
+  `analyze.package_lifetime` returns every period and flags each one `censored`:
+  a package still installed at `as_of` has a *lower bound*, not a lifetime. On
+  the author's log 1 378 of 2 808 packages are in that state, so ranking the raw
+  table put the 40 oldest survivors on top as 40 identical bars and pushed every
+  real lifetime off the chart. Rank with `analyze.completed_lifetimes` (2 278
+  rows, median 120 days) and list the rest with `analyze.installed_whole_time`
+  (331 packages). The two charts are `paclog plot package-lifetime` and
+  `paclog plot installed-whole-time`.
+- **`analyze.initial_install_window` is what "since the system was built" means**,
+  and it is derived from the data on purpose: from the first event to the last
+  event before the log's first day-long silence. The base install on the author's
+  log is 21 hours and four transactions (10:53, 12:03, 13:06 for the X.org
+  stack, 13:16), so any hardcoded hour count cuts the list in the wrong place,
+  and comparing against the *first event* finds 73 of the 331 packages.
 - **Charts are byte-reproducible, and keeping them that way is load-bearing**,
   because `visualizations/*.svg` are committed. Three settings do the work:
   `svg.hashsalt` in `plots/base.py`, `metadata={"Date": None}` in `plots/base.py`'s
