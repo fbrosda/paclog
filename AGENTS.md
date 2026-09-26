@@ -68,12 +68,15 @@ tests/          pytest, driven by a hand-written fixtures/pacman.log
 - **Never rank install periods by length without splitting on censoring.**
   `analyze.package_lifetime` returns every period and flags each one `censored`:
   a package still installed at `as_of` has a *lower bound*, not a lifetime. On
-  the author's log 1 378 of 2 808 packages are in that state, so ranking the raw
-  table put the 40 oldest survivors on top as 40 identical bars and pushed every
-  real lifetime off the chart. Rank with `analyze.completed_lifetimes` (2 278
-  rows, median 120 days) and list the rest with `analyze.installed_whole_time`
-  (331 packages). The two charts are `paclog plot package-lifetime` and
-  `paclog plot installed-whole-time`.
+  the author's log 1 666 of the 3 944 periods are censored — 1 666 distinct
+  packages, since no package has two open periods at once — so ranking the raw
+  table put the 40 oldest survivors on top as 40 identical 3 850-day bars and
+  pushed every real lifetime off the chart. Rank with
+  `analyze.completed_lifetimes` (2 278 rows, median 120 days) and list the rest
+  with `analyze.installed_whole_time` (331 packages). The two charts are
+  `paclog plot package-lifetime` and `paclog plot installed-whole-time`.
+  Do not confuse 1 666 with the 1 378 packages whose periods are *all* censored;
+  the remaining 288 have both kinds, and it is the censored period that ranks.
 - **`analyze.initial_install_window` is what "since the system was built" means**,
   and it is derived from the data on purpose: from the first event to the last
   event before the log's first day-long silence. The base install on the author's

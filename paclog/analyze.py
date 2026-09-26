@@ -274,8 +274,13 @@ def completed_lifetimes(frame: pd.DataFrame, as_of: datetime | pd.Timestamp) -> 
     made the original lifetime chart useless: every still-installed package scores
     ``as_of - installed``, so the longest bars were whichever packages happened to
     be installed first, all pinned to the length of the log and all identical.
-    The author's log had 1 378 such packages against 2 278 completed periods, so
-    the top 40 was entirely censored -- 40 bars of exactly the same length.
+    The author's log had 1 666 censored periods -- 1 666 distinct packages, as no
+    package can have two of them open at once -- against 2 278 completed ones, so
+    the top 40 was entirely censored: 40 bars of exactly the same length, all of
+    them from the 331 packages that have been installed since the machine was
+    built. (1 378 is a different and less useful number: packages whose periods
+    are *all* censored, the other 288 having been removed and reinstalled at
+    least once.)
     """
     lifetimes = package_lifetime(frame, as_of)
     if lifetimes.empty:

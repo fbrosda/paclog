@@ -306,7 +306,10 @@ def build_parser() -> argparse.ArgumentParser:
         dest="top_n",
         type=int,
         default=None,
-        help="cap the number of packages drawn in the timeline (default: 150)",
+        help=(
+            "cap the number of packages drawn in the timeline; by default every "
+            "package is drawn, so this only makes the chart smaller on purpose"
+        ),
     )
     p_plot.set_defaults(func=cmd_plot)
 
@@ -319,7 +322,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("--strict", action="store_true", help="see `paclog parse --strict`")
     p_build.add_argument("--dedupe", action="store_true", help="see `paclog parse --dedupe`")
     p_build.add_argument(
-        "--top-n", dest="top_n", type=int, default=None, help="timeline package cap (default: 150)"
+        "--top-n",
+        dest="top_n",
+        type=int,
+        default=None,
+        help="timeline package cap; by default every package is drawn",
     )
     p_build.set_defaults(func=cmd_build)
 
