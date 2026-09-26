@@ -1,3 +1,19 @@
-*.csv
+# Parsed data is derived from the log and is never committed. Note this is the
+# whole directory, not just *.csv: the metadata sidecar is JSON and would
+# otherwise be committed by accident.
+/data/
+
+# Test fixtures are hand-written inputs, not machine-specific logs.
+/!tests/fixtures/*.log
+
 *.log
+!tests/fixtures/*.log
+
 .ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
