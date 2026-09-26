@@ -35,7 +35,8 @@ ACTION_COLOR_LIST: list[str] = [ACTION_COLORS[a.value] for a in ACTION_ORDER]
 FIG_SIZES: dict[str, tuple[float, float]] = {
     "events-per-hour": (14, 8),
     "events-per-weekday": (12, 6),
-    "events-per-month": (16, 9),
+    "events-per-month": (32, 18),
+    "events-per-month-by-action": (16, 15),
     "action-distribution": (7, 7),
     "upgrade-interval": (7, 10),
     "package-lifetime": (7, 10),

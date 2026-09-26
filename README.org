@@ -55,6 +55,15 @@ All five actions are recorded.  Note that ~downgraded~ is easy to miss: it is a 
 
 Alongside the CSV, ~paclog parse~ writes ~data/pacman_history.meta.json~ recording the source logs, the row count, the resolved timezones, and a full account of which lines were skipped and why.  The old parser dropped anything it did not recognise with no trace, so a suspiciously low row count had no explanation available.
 
+* Charts
+
+Run ~paclog list~ to see the registry.  Two things about them are worth stating outright, because both were got wrong at one point during development and the mistake was invisible in the output:
+
+- The timeline draws *every* package, with *every* one of them labelled.  There is no default cap.  An earlier revision limited it to the 150 packages with the longest history and a later one thinned the y axis labels to roughly 80 of 2 808; both were reverted.  Trimming a chart makes it smaller and useless, and on this log the difference was between a chart you can read and a file you can only measure.  The cost is size: ~4.6 MB for 2 808 packages and 3 944 install periods, which is close to what the original ~4.1 MB chart cost while drawing three times as many artists.  If you want a smaller one on purpose, ~--top-n~ is still there.
+- ~events_per_month.svg~ stacks by action, as it always did, and ~events_per_month_by_action.svg~ breaks the same data into one panel per action on independent y scales.  Both exist because upgrades are 90% of events here and 45 of the events are downgrades; stacked, the four minor series are a sliver at the base of each bar, and unsplit, ~downgraded~ is a flat line on zero.  The stacked chart is 32x18 for the same reason -- 126 months of five series needs the width.
+
+The legend on the stacked chart sits above the plot area.  It used to sit at ~upper left~, which is exactly where the March-2016 first-install spike is.
+
 * Timezones
 
 Until 2019-10-27, pacman wrote timestamps without an offset; after that it writes ISO-8601 with one.  A single log file can contain both, and on the author's machine roughly a third of the lines are the offset-less kind.

@@ -76,10 +76,19 @@ tests/          pytest, driven by a hand-written fixtures/pacman.log
   `model.ACTION_ORDER`. The original derived a subplot grid from the data's
   first-appearance order, which worked only while there happened to be exactly
   four actions; adding `downgraded` would have made it an `IndexError`.
-- **The timeline is capped at 150 packages by default.** It ranks by install
-  history and says in its own title how many it omitted. The
-  old version drew one artist per install period with no height ceiling, which is
-  how a single chart reached 4.2 MB. Use `--top-n` to change the cap.
+- **The timeline plots and labels every package. Do not add a default cap.** An
+  earlier revision capped it at 150 packages and a later one strided the y labels
+  to ~80 of 2 808. Both were wrong and both were reverted: the cap changed what
+  the chart was about, and the striding saved SVG bytes at the cost of making the
+  chart unreadable, which is the only thing it is for. All 2 808 packages, all
+  3 944 install periods and all 2 808 labels are drawn, which is 4.6 MB. The
+  original 4.1 MB chart was not smaller because it hid nothing — it was smaller
+  only because it drew one artist per *period* instead of one per *package*.
+  `--top-n` remains available for a deliberate quick overview.
+- **Do not shrink `visualizations/*.svg` by dropping content.** They are
+  regenerated on `paclog plot`, so a size reduction is only worth having if the
+  chart still says the same thing. Check the label count and the drawn-segment
+  count against `analyze.install_periods` after touching `plots/timeline.py`.
 - **Do not add `numpy` back as a dependency.** It was imported and never used in
   both the original script and the notebook; it is gone.
 

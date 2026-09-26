@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from paclog import plots
+from paclog import analyze, plots
 from paclog.plots import Context, names, render, render_all
 from paclog.plots.base import ACTION_COLORS
 from paclog.plots.timeline import stable_unit
@@ -109,3 +109,164 @@ def test_timeline_respects_the_package_cap(frame, ctx):
     capped = Context(as_of=ctx.as_of, seed=0, options={"top_n": 1})
     render("timeline", frame, capped)
     render("timeline", frame, Context(as_of=ctx.as_of, seed=0, options={"top_n": 0}))
+
+
+def test_timeline_plots_every_package_by_default(frame):
+    """The default must not silently omit packages.
+
+    An earlier version capped at 150 rows, which on a real log dropped 2 658 of
+    2 808 packages and made the chart describe a different machine than the one it
+    was run on. The cap is now opt-in via ``--top-n`` only.
+    """
+    periods = analyze.install_periods(frame, AS_OF)
+    expected = periods["package"].nunique()
+
+    fig = render("timeline", frame, Context(as_of=AS_OF, options={"top_n": 0}))
+    ylim = fig.axes[0].get_ylim()
+    # ylim spans [n-0.5, -0.5], so the row count is exactly its height.
+    assert round(ylim[0] - ylim[1]) == expected
+
+
+def test_timeline_cap_actually_reduces_rows(frame):
+    total = analyze.install_periods(frame, AS_OF)["package"].nunique()
+    capped = render("timeline", frame, Context(as_of=AS_OF, options={"top_n": 1}))
+    ylim = capped.axes[0].get_ylim()
+    assert round(ylim[0] - ylim[1]) == 1
+    assert total > 1
+
+
+def test_timeline_labels_every_package(big_frame):
+    """Every package gets a row *and* its own label.
+
+    Two earlier revisions dropped packages (a 150-package cap) and then strided
+    the y labels to ~80 of 2 808. Both were the wrong trade: the cap changed what
+    the chart was about, and the striding saved SVG bytes at the price of making
+    the chart unreadable -- which is the chart's entire job. The canvas grows to
+    fit instead.
+    """
+    fig = render("timeline", big_frame, Context(as_of=AS_OF, options={"top_n": 0}))
+    ax = fig.axes[0]
+    labels = [text.get_text() for text in ax.get_yticklabels()]
+    assert sorted(labels) == sorted(analyze.install_periods(big_frame, AS_OF)["package"].unique())
+    assert round(ax.get_ylim()[0] - ax.get_ylim()[1]) == big_packages(big_frame)
+
+
+def test_timeline_height_grows_to_fit_rather_than_capping_rows(big_frame):
+    """Tall means tall; it never means "drop rows to stay a sensible size"."""
+    fig = render("timeline", big_frame, Context(as_of=AS_OF, options={"top_n": 0}))
+    from paclog.config import INCHES_PER_PACKAGE, MAX_TIMELINE_HEIGHT_IN
+
+    height = fig.get_size_inches()[1]
+    assert height == pytest.approx(INCHES_PER_PACKAGE * big_packages(big_frame))
+    assert height < MAX_TIMELINE_HEIGHT_IN  # 400 packages must not hit the ceiling
+
+
+# -- monthly charts --------------------------------------------------------- #
+
+
+def test_events_per_month_stacks_by_action(frame):
+    """One bar per month, split by action, as the original chart had it.
+
+    An earlier attempt replaced this with a plain total series. That dropped the
+    action mix from the chart, which is information the original showed and the
+    notebook narrative discusses.
+    """
+    from paclog.model import ACTION_ORDER
+
+    table = analyze.events_per_month(frame)
+    fig = render("events-per-month", frame, Context(as_of=AS_OF))
+    ax = fig.axes[0]
+    assert len(fig.axes) == 1
+    assert len(ax.patches) == table.shape[0] * len(table.columns)
+    assert ax.get_legend() is not None
+    assert [h.get_text() for h in ax.get_legend().get_texts()][:1] == [ACTION_ORDER[0].value]
+
+
+def test_events_per_month_legend_cannot_cover_the_install_spike(frame):
+    """The original put the legend at ``loc="upper left"``.
+
+    On a real log that is exactly where the tallest thing in the left third of
+    the chart is -- the March-2016 first-install spike, 551 installs -- so the
+    legend drew on top of the data it was labelling. It now sits above the axes,
+    in display coordinates, and cannot overlap the plot area at all.
+    """
+    from matplotlib.transforms import Bbox
+
+    ax = render("events-per-month", frame, Context(as_of=AS_OF)).axes[0]
+    legend = ax.get_legend()
+    anchor = legend.get_bbox_to_anchor().transformed(ax.transAxes.inverted())
+    assert isinstance(anchor, Bbox)
+    assert anchor.y0 > 1.0, "legend must be anchored above the top of the axes"
+
+
+def big_packages(frame) -> int:
+    return analyze.install_periods(frame, AS_OF)["package"].nunique()
+
+
+@pytest.fixture
+def big_frame():
+    """A few hundred packages, to exercise the all-labels-on-the-timeline path."""
+    import pandas as pd
+
+    rows = []
+    start = pd.Timestamp("2016-01-01", tz="UTC")
+    for index in range(400):
+        name = f"pkg{index:04d}"
+        rows.append((name, start, "installed", None, "1-1"))
+        rows.append((name, start + pd.Timedelta(30, unit="D"), "upgraded", "1-1", "2-1"))
+    frame = pd.DataFrame(
+        rows, columns=["package", "timestamp", "action", "version_before", "version_after"]
+    )
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    return frame
+
+
+@pytest.fixture
+def skewed_frame():
+    """One action at ~99.99% of events, the shape a real pacman log has.
+
+    Upgrades are 90% of events on the author's log, and 3 000-to-1 here, so the
+    downgrade series is the canary: on a shared y-axis it collapses to a
+    zero-height line. The upgrades are deliberately piled into a single month
+    rather than smeared over ten, because it is the *peak* of each action that
+    sets that panel's scale -- spreading them out would make the fixture look
+    harmless when it is meant to be pathological.
+    """
+    import pandas as pd
+
+    base = pd.Timestamp("2016-01-01", tz="UTC")
+    january = base + pd.Timedelta(20, unit="h")
+    rows = [(f"pkg{i}", january, "upgraded", "1-1", "2-1") for i in range(3000)]
+    # February holds a single event, and it is the minority action.
+    rows.append(("pkg0", base + pd.Timedelta(35, unit="D"), "downgraded", "2-1", "1-1"))
+    frame = pd.DataFrame(
+        rows, columns=["package", "timestamp", "action", "version_before", "version_after"]
+    )
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    return frame
+
+
+def test_a_dominant_action_does_not_flatten_the_others(skewed_frame):
+    """Each panel scales to its own peak, so the minority action stays visible."""
+    fig = render("events-per-month-by-action", skewed_frame, Context(as_of=AS_OF))
+    scales = {ax.get_ylabel(): ax.get_ylim()[1] for ax in fig.axes}
+    peaks = analyze.events_per_month(skewed_frame).max()
+    assert scales["upgraded"] > 1000 * scales["downgraded"]
+    # The downgraded panel must still resolve its single event.
+    assert scales["downgraded"] >= peaks["downgraded"]
+    # Each y-limit tracks that panel's own peak -- a shared axis would be 1:1.
+    for action, scale in scales.items():
+        assert 1 <= scale <= 1.1 * peaks[action]
+
+
+def test_monthly_charts_handle_a_single_event_month(skewed_frame):
+    assert not analyze.events_per_month(skewed_frame).empty
+    render("events-per-month", skewed_frame, Context(as_of=AS_OF))
+
+
+def test_events_per_month_by_action_has_one_panel_per_action(frame):
+    from paclog.model import ACTION_ORDER
+
+    fig = render("events-per-month-by-action", frame, Context(as_of=AS_OF))
+    assert len(fig.axes) == len(ACTION_ORDER)
+    assert [ax.get_ylabel() for ax in fig.axes] == [a.value for a in ACTION_ORDER]

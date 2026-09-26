@@ -49,11 +49,12 @@ def timeline(frame: pd.DataFrame, ctx: Context):
         ax.set_title("Package Installation Periods")
         return fig
 
-    top_n = int(ctx.options.get("top_n") or 0)
     total = periods["package"].nunique()
+    top_n = int(ctx.options.get("top_n") or 0)
     if top_n and total > top_n:
-        # Rank by how much history the package actually has, so the cap keeps the
-        # packages worth looking at rather than an arbitrary alphabetical slice.
+        # Opt-in summary view. Rank by how much history the package actually has,
+        # so the cap keeps the packages worth looking at rather than an arbitrary
+        # alphabetical slice.
         weight = periods.assign(days=(periods["end"] - periods["start"]).dt.total_seconds())
         ranked = (
             weight.groupby("package", observed=True)
@@ -89,11 +90,16 @@ def timeline(frame: pd.DataFrame, ctx: Context):
             linewidths=0.3,
         )
 
+    # Every package gets a row *and* its own label. The canvas grows to fit; it is
+    # never the labels or the rows that get dropped to keep the file small. The
+    # y-label text is the dominant cost in the SVG (~4.6 MB for 2 808 labels), and
+    # that is the same order as the original chart, so there is nothing to win by
+    # hiding them.
     height = min(max(MIN_HEIGHT_IN, INCHES_PER_PACKAGE * len(packages)), MAX_TIMELINE_HEIGHT_IN)
     fig.set_size_inches(16, height)
 
     ax.set_yticks(range(len(packages)))
-    ax.set_yticklabels(packages, fontsize=max(4, min(9, int(400 / max(len(packages), 1)))))
+    ax.set_yticklabels(packages, fontsize=4)
     ax.set_ylim(len(packages) - 0.5, -0.5)
     ax.set_xlabel("Time")
     ax.set_title(f"Package Installation Periods ({note})")

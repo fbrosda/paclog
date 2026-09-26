@@ -27,12 +27,17 @@ DEFAULT_LOG_GLOBS: tuple[str, ...] = (
 AUTO = "auto"
 UTC = "UTC"
 
-#: Cap on how tall the timeline figure is allowed to get, in inches. The original
-#: was ``len(packages) * 0.4`` with no ceiling, which is how a single chart turned
-#: into a 4.2 MB SVG.
-MAX_TIMELINE_HEIGHT_IN = 48.0
-INCHES_PER_PACKAGE = 0.16
-TIMELINE_TOP_N = 150
+#: Height budget for the timeline. The original was ``len(packages) * 0.4`` with no
+#: ceiling; 0.25 still leaves ~18pt of vertical space per row, which is ample for
+#: a 4pt label, and keeps the canvas 2.4x shorter on a 2 800-package log.
+MAX_TIMELINE_HEIGHT_IN = 1200.0
+INCHES_PER_PACKAGE = 0.25
+
+#: 0 means "plot every package, and label every package". A cap is available via
+#: ``--top-n`` for a quick overview, but it is never the default: silently
+#: omitting packages or their labels makes the chart describe a different machine
+#: than the one it was run on.
+TIMELINE_TOP_N = 0
 
 
 class ConfigError(Exception):
